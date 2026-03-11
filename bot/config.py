@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     encryption_key: str = ""
 
     # Monitoring
-    monitor_poll_interval: int = Field(default=15, ge=5, le=120)
+    # For aggressive copy-trading, you can go down to 1s
+    monitor_poll_interval: int = Field(default=15, ge=1, le=120)
 
     # DB & Redis
     db_url: str = "sqlite+aiosqlite:///./polybot.db"
@@ -28,6 +29,10 @@ class Settings(BaseSettings):
     across_api_url: str = "https://across.to/api"
     bridge_slippage: float = 0.005
     transak_api_key: str = ""
+
+    # Execution tuning
+    max_concurrent_trades: int = Field(default=20, ge=1, le=200)
+    collect_fees_onchain: bool = False
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

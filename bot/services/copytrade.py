@@ -67,7 +67,8 @@ class CopyTradeEngine:
             f"{len(followers)} follower(s) for {signal.master_wallet[:10]}..."
         )
 
-        semaphore = asyncio.Semaphore(5)
+        # Allow a relatively high degree of parallelism for fast copying
+        semaphore = asyncio.Semaphore(settings.max_concurrent_trades)
 
         async def process_with_limit(user: User):
             async with semaphore:
@@ -171,12 +172,14 @@ class CopyTradeEngine:
                 session.add(trade)
                 await session.flush()
 
-                # Transfer platform fee
+                # Transfer / record platform fee
                 fee_tx_hash = None
                 if user.paper_trading:
+                    # Simulated in paper mode
                     fee_tx_hash = "paper_fee_simulated"
                     trade.status = TradeStatus.FEE_PAID
-                else:
+                elif settings.collect_fees_onchain and settings.fees_wallet:
+                    # Optional on-chain fee transfer (slower, can be toggled off for speed)
                     try:
                         pk = decrypt_private_key(
                             user.encrypted_private_key,

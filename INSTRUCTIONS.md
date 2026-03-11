@@ -100,7 +100,14 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 | Variable | Description |
 |----------|-------------|
-| `MONITOR_POLL_INTERVAL` | Fréquence de scan en secondes (défaut : 15) |
+| `MONITOR_POLL_INTERVAL` | Fréquence de scan en secondes (défaut : 15, peut descendre à 1 pour du copy-trading très réactif) |
+
+### Bloc Exécution
+
+| Variable | Description |
+|----------|-------------|
+| `MAX_CONCURRENT_TRADES` | Nombre max de trades copiés en parallèle (défaut : 20) |
+| `COLLECT_FEES_ONCHAIN` | `true`/`false` — activer ou non le transfert on-chain des frais (défaut : `false` pour maximiser la vitesse) |
 
 ### Bloc Infrastructure
 
