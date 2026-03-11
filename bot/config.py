@@ -1,0 +1,35 @@
+"""Application configuration loaded from environment variables."""
+
+from pydantic_settings import BaseSettings
+from pydantic import Field
+
+
+class Settings(BaseSettings):
+    # Telegram
+    telegram_token: str = ""
+    admin_chat_id: str = ""
+
+    # Fees
+    fees_wallet: str = ""
+    platform_fee_rate: float = Field(default=0.01, ge=0, le=0.1)
+
+    # Encryption
+    encryption_key: str = ""
+
+    # Monitoring
+    monitor_poll_interval: int = Field(default=15, ge=5, le=120)
+
+    # DB & Redis
+    db_url: str = "sqlite+aiosqlite:///./polybot.db"
+    redis_url: str = "redis://redis:6379"
+
+    # Bridge / On-ramp
+    lifi_api_key: str = ""
+    across_api_url: str = "https://across.to/api"
+    bridge_slippage: float = 0.005
+    transak_api_key: str = ""
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+
+settings = Settings()

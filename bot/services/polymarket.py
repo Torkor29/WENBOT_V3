@@ -1,0 +1,268 @@
+"""Polymarket API wrapper — market data, public positions, and order execution."""
+
+import logging
+from dataclasses import dataclass
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+CLOB_HOST = "https://clob.polymarket.com"
+GAMMA_HOST = "https://gamma-api.polymarket.com"
+
+
+@dataclass
+class MarketInfo:
+    market_id: str
+    question: str
+    slug: str
+    tokens: list  # [{token_id, outcome}]
+    active: bool
+    end_date: Optional[str] = None
+    category: Optional[str] = None
+
+
+@dataclass
+class Position:
+    market_id: str
+    token_id: str
+    outcome: str
+    size: float
+    avg_price: float
+    current_price: float
+    pnl_pct: float
+
+
+@dataclass
+class OrderResult:
+    success: bool
+    order_id: Optional[str] = None
+    filled_size: float = 0.0
+    avg_price: float = 0.0
+    error: Optional[str] = None
+
+
+class PolymarketClient:
+    """Wrapper for Polymarket public and trading APIs."""
+
+    def create_user_client(self, private_key: str) -> "ClobClient":
+        """Create a CLOB client for a specific user (follower) to sign orders."""
+        from py_clob_client.client import ClobClient
+
+        client = ClobClient(
+            host=CLOB_HOST,
+            key=private_key,
+            chain_id=137,
+        )
+        creds = client.create_or_derive_api_creds()
+        client.set_api_creds(creds)
+        return client
+
+    async def get_positions_by_address(self, wallet_address: str) -> list[Position]:
+        """Fetch positions for any public wallet address via the Gamma API.
+
+        No private key or API credentials needed — this is public data.
+        """
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as http:
+                resp = await http.get(
+                    f"{GAMMA_HOST}/positions",
+                    params={"user": wallet_address.lower()},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            positions = []
+            for p in data:
+                size = float(p.get("size", 0))
+                if size <= 0:
+                    continue
+
+                avg_price = float(p.get("avgPrice", 0))
+                current_price = float(p.get("currentPrice", avg_price))
+                pnl_pct = 0.0
+                if avg_price > 0:
+                    pnl_pct = ((current_price - avg_price) / avg_price) * 100
+
+                positions.append(Position(
+                    market_id=p.get("conditionId", p.get("marketId", "")),
+                    token_id=p.get("asset", p.get("tokenId", "")),
+                    outcome=p.get("outcome", ""),
+                    size=size,
+                    avg_price=avg_price,
+                    current_price=current_price,
+                    pnl_pct=pnl_pct,
+                ))
+
+            return positions
+
+        except Exception as e:
+            logger.error(f"Failed to fetch positions for {wallet_address[:10]}...: {e}")
+            return []
+
+    async def get_markets(
+        self, limit: int = 50, category: Optional[str] = None
+    ) -> list[MarketInfo]:
+        """Fetch active markets from Polymarket Gamma API."""
+        import httpx
+
+        try:
+            params = {"limit": limit, "active": True, "closed": False}
+            if category:
+                params["tag"] = category
+
+            async with httpx.AsyncClient(timeout=15) as http:
+                resp = await http.get(f"{GAMMA_HOST}/markets", params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+            markets = []
+            for m in data:
+                tokens = []
+                for t in m.get("clobTokenIds", "").split(","):
+                    if t.strip():
+                        tokens.append({"token_id": t.strip()})
+
+                markets.append(MarketInfo(
+                    market_id=m.get("conditionId", ""),
+                    question=m.get("question", ""),
+                    slug=m.get("slug", ""),
+                    tokens=tokens,
+                    active=m.get("active", False),
+                    end_date=m.get("endDate"),
+                    category=m.get("groupItemTitle"),
+                ))
+
+            return markets
+
+        except Exception as e:
+            logger.error(f"Failed to fetch markets: {e}")
+            return []
+
+    async def place_order(
+        self,
+        private_key: str,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+    ) -> OrderResult:
+        """Place a limit order on Polymarket for a user."""
+        try:
+            from py_clob_client.clob_types import OrderArgs, OrderType
+
+            client = self.create_user_client(private_key)
+
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=price,
+                size=size,
+                side=side,
+            )
+
+            signed_order = client.create_order(order_args)
+            result = client.post_order(signed_order, order_type=OrderType.GTC)
+
+            if result and result.get("orderID"):
+                return OrderResult(
+                    success=True,
+                    order_id=result["orderID"],
+                    filled_size=float(result.get("filledSize", 0)),
+                    avg_price=price,
+                )
+            else:
+                return OrderResult(
+                    success=False,
+                    error=result.get("errorMsg", "Unknown error"),
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to place order: {e}")
+            return OrderResult(success=False, error=str(e))
+
+    async def place_market_order(
+        self,
+        private_key: str,
+        token_id: str,
+        side: str,
+        amount_usdc: float,
+    ) -> OrderResult:
+        """Place a market (FOK) order — fill immediately at best price."""
+        try:
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+
+            client = self.create_user_client(private_key)
+
+            order_args = MarketOrderArgs(
+                token_id=token_id,
+                amount=amount_usdc,
+                side=side,
+            )
+
+            signed_order = client.create_market_order(order_args)
+            result = client.post_order(signed_order, order_type=OrderType.FOK)
+
+            if result and result.get("orderID"):
+                return OrderResult(
+                    success=True,
+                    order_id=result["orderID"],
+                    filled_size=float(result.get("filledSize", 0)),
+                    avg_price=float(result.get("avgPrice", 0)),
+                )
+            else:
+                return OrderResult(
+                    success=False,
+                    error=result.get("errorMsg", "Order not filled"),
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to place market order: {e}")
+            return OrderResult(success=False, error=str(e))
+
+    async def cancel_order(self, private_key: str, order_id: str) -> bool:
+        """Cancel an open order."""
+        try:
+            client = self.create_user_client(private_key)
+            result = client.cancel(order_id)
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Failed to cancel order {order_id}: {e}")
+            return False
+
+    async def get_order_book(self, token_id: str) -> dict:
+        """Get the order book for a token."""
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                resp = await http.get(
+                    f"{CLOB_HOST}/book",
+                    params={"token_id": token_id},
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:
+            logger.error(f"Failed to get order book: {e}")
+            return {"bids": [], "asks": []}
+
+    async def get_price(self, token_id: str, side: str = "BUY") -> float:
+        """Get the current best price for a token via the order book."""
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                resp = await http.get(
+                    f"{CLOB_HOST}/midpoint",
+                    params={"token_id": token_id},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return float(data.get("mid", 0))
+        except Exception as e:
+            logger.error(f"Failed to get price for {token_id}: {e}")
+            return 0.0
+
+
+# Singleton
+polymarket_client = PolymarketClient()

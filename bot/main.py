@@ -1,0 +1,137 @@
+"""Main entry point for the Polymarket CopyTrading bot."""
+
+import asyncio
+import logging
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram.ext import Application
+
+from bot.config import settings
+from bot.db.session import init_db
+from bot.handlers.start import get_start_handler
+from bot.handlers.settings import get_settings_handler
+from bot.handlers.balance import get_balance_handlers
+from bot.handlers.controls import get_control_handlers
+from bot.handlers.admin import get_admin_handlers
+from bot.handlers.bridge import get_bridge_handler
+from bot.handlers.deposit import get_deposit_handler
+from bot.services.monitor import MultiMasterMonitor
+from bot.services.copytrade import CopyTradeEngine
+from bot.services.rate_limiter import init_rate_limiter
+from bot.services.scheduler import (
+    reset_daily_limits,
+    cleanup_expired_otps,
+    health_check,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def build_application() -> Application:
+    """Build and configure the Telegram bot application."""
+    app = Application.builder().token(settings.telegram_token).build()
+
+    app.add_handler(get_start_handler())
+    app.add_handler(get_settings_handler())
+    app.add_handler(get_bridge_handler())
+    app.add_handler(get_deposit_handler())
+
+    for handler in get_balance_handlers():
+        app.add_handler(handler)
+    for handler in get_control_handlers():
+        app.add_handler(handler)
+    for handler in get_admin_handlers():
+        app.add_handler(handler)
+
+    return app
+
+
+def setup_scheduler(monitor: MultiMasterMonitor) -> AsyncIOScheduler:
+    """Configure periodic background tasks."""
+    scheduler = AsyncIOScheduler()
+
+    scheduler.add_job(
+        reset_daily_limits,
+        "cron", hour=0, minute=0,
+        id="reset_daily_limits",
+    )
+
+    scheduler.add_job(
+        cleanup_expired_otps,
+        "interval", minutes=10,
+        id="cleanup_otps",
+    )
+
+    scheduler.add_job(
+        health_check,
+        "interval", minutes=5,
+        id="health_check",
+    )
+
+    # Refresh watched wallets every 60s so new follows are picked up quickly
+    scheduler.add_job(
+        monitor.refresh_watched_wallets,
+        "interval", seconds=60,
+        id="refresh_watched_wallets",
+    )
+
+    return scheduler
+
+
+async def main() -> None:
+    """Initialize database and start the bot."""
+    logger.info("Starting Polymarket CopyTrading Bot...")
+
+    await init_db()
+    logger.info("Database initialized.")
+
+    await init_rate_limiter(settings.redis_url)
+
+    app = build_application()
+    logger.info("Bot handlers registered.")
+
+    engine = CopyTradeEngine(telegram_bot=app.bot)
+
+    monitor = MultiMasterMonitor(
+        poll_interval=settings.monitor_poll_interval,
+        on_signal=engine.handle_signal,
+    )
+
+    scheduler = setup_scheduler(monitor)
+    scheduler.start()
+    logger.info("Scheduler started.")
+
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    logger.info("Telegram bot polling started.")
+
+    await monitor.start()
+    logger.info(
+        f"Multi-master monitor started "
+        f"({len(monitor.watched_wallets)} wallet(s) watched)."
+    )
+
+    logger.info("Bot is fully running. Press Ctrl+C to stop.")
+
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        logger.info("Shutting down...")
+        scheduler.shutdown(wait=False)
+        await monitor.stop()
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        logger.info("Shutdown complete.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
