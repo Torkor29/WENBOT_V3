@@ -56,7 +56,6 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if user.wallet_address:
             w = user.wallet_address
             wallet_display = f"`{w[:6]}...{w[-4:]}`"
-        full_wallet = user.wallet_address or ""
 
         sol_display = "Non configuré"
         if user.solana_wallet_address:
@@ -80,13 +79,6 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"⏸️ Statut : **{'En pause' if user.is_paused else 'Actif'}**"
         )
 
-        # Build optional Transak URL if possible
-        transak_url = None
-        if full_wallet:
-            from bot.handlers.deposit import _build_transak_url
-
-            transak_url = _build_transak_url(full_wallet)
-
         keyboard = [
             [
                 InlineKeyboardButton("📊 Positions", callback_data="cmd_positions"),
@@ -97,16 +89,6 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 InlineKeyboardButton("⚙️ Paramètres", callback_data="cmd_settings"),
             ],
         ]
-
-        if transak_url:
-            keyboard.insert(
-                1,
-                [
-                    InlineKeyboardButton(
-                        "💳 Acheter USDC", url=transak_url
-                    ),
-                ],
-            )
 
     await update.message.reply_text(
         text,
