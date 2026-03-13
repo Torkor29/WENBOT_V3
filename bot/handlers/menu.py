@@ -505,35 +505,156 @@ async def switch_wallet_callback(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
-# ── Dashboard ─────────────────────────────────────
+# ── Dashboard (rapport in-Telegram) ───────────────
 
 async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Affiche le lien vers le dashboard web."""
+    """Génère un rapport de performance directement dans Telegram.
+
+    Affiche pour chaque trader suivi : trades jour/semaine, volume, win rate, P&L.
+    """
     query = update.callback_query
     await query.answer()
 
-    if settings.dashboard_url:
-        url = settings.dashboard_url
-        note = ""
-    else:
-        url = f"http://localhost:{settings.dashboard_port}"
-        note = (
-            "\n\n⚠️ Accessible uniquement depuis le serveur "
-            "où tourne le bot (ou via tunnel / reverse proxy)."
+    from datetime import datetime, timezone, timedelta
+    from bot.models.trade import Trade, TradeStatus, TradeSide
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+
+        us = await get_or_create_settings(session, user)
+        followed = us.followed_wallets or []
+
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=today_start.weekday())
+
+        # Charger tous les trades filled de cet utilisateur
+        all_trades = (await session.execute(
+            select(Trade).where(
+                Trade.user_id == user.id,
+                Trade.status == TradeStatus.FILLED,
+            ).order_by(Trade.created_at.desc())
+        )).scalars().all()
+
+    if not followed:
+        await query.edit_message_text(
+            "📈 **DASHBOARD**\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Aucun trader suivi.\n"
+            "Ajoutez des traders dans ⚙️ Paramètres pour voir les rapports.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings")],
+                [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+            ]),
+        )
+        return
+
+    # --- Stats globales ---
+    trades_today = [t for t in all_trades if t.created_at >= today_start]
+    trades_week = [t for t in all_trades if t.created_at >= week_start]
+    vol_today = sum(t.gross_amount_usdc for t in trades_today)
+    vol_week = sum(t.gross_amount_usdc for t in trades_week)
+
+    # P&L global
+    buy_avg: dict[str, list[float]] = {}
+    for t in all_trades:
+        if t.side == TradeSide.BUY:
+            buy_avg.setdefault(t.token_id, []).append(t.price)
+    total_pnl = 0.0
+    wins = 0
+    closed = 0
+    for t in all_trades:
+        if t.side == TradeSide.SELL and t.token_id in buy_avg:
+            avg = sum(buy_avg[t.token_id]) / len(buy_avg[t.token_id])
+            pnl = (t.price - avg) * t.shares
+            total_pnl += pnl
+            closed += 1
+            if pnl > 0:
+                wins += 1
+    global_wr = f"{(wins / closed) * 100:.0f}%" if closed > 0 else "N/A"
+    global_pnl = f"{total_pnl:+.2f}" if closed > 0 else "N/A"
+
+    lines = [
+        "📈 **DASHBOARD — RAPPORT DE PERFORMANCE**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n",
+        f"📅 Aujourd'hui : **{len(trades_today)}** trades • **{vol_today:.2f}** USDC",
+        f"📆 Cette semaine : **{len(trades_week)}** trades • **{vol_week:.2f}** USDC",
+        f"📊 Win rate global : **{global_wr}**",
+        f"💰 P&L global : **{global_pnl} USDC**\n",
+    ]
+
+    # --- Stats par trader suivi ---
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("**DÉTAIL PAR TRADER**\n")
+
+    for wallet in followed:
+        w_short = f"{wallet[:6]}...{wallet[-4:]}"
+        w_lower = wallet.lower()
+
+        # Trades de ce trader
+        trader_trades = [
+            t for t in all_trades
+            if t.master_wallet and t.master_wallet.lower() == w_lower
+        ]
+        t_today = [t for t in trader_trades if t.created_at >= today_start]
+        t_week = [t for t in trader_trades if t.created_at >= week_start]
+        t_vol = sum(t.gross_amount_usdc for t in trader_trades)
+
+        # Win rate pour ce trader
+        t_buy_avg: dict[str, list[float]] = {}
+        for t in trader_trades:
+            if t.side == TradeSide.BUY:
+                t_buy_avg.setdefault(t.token_id, []).append(t.price)
+        t_pnl = 0.0
+        t_wins = 0
+        t_closed = 0
+        for t in trader_trades:
+            if t.side == TradeSide.SELL and t.token_id in t_buy_avg:
+                avg = sum(t_buy_avg[t.token_id]) / len(t_buy_avg[t.token_id])
+                pnl = (t.price - avg) * t.shares
+                t_pnl += pnl
+                t_closed += 1
+                if pnl > 0:
+                    t_wins += 1
+        t_wr = f"{(t_wins / t_closed) * 100:.0f}%" if t_closed > 0 else "N/A"
+        t_pnl_str = f"{t_pnl:+.2f}" if t_closed > 0 else "N/A"
+
+        lines.append(f"👤 `{w_short}`")
+        lines.append(
+            f"   📅 Jour : {len(t_today)} trades • "
+            f"📆 Sem : {len(t_week)} trades"
+        )
+        lines.append(
+            f"   💰 Volume : {t_vol:.2f} USDC • "
+            f"WR : {t_wr} • P&L : {t_pnl_str}"
         )
 
-    text = (
-        "📈 **DASHBOARD WEB**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Le dashboard affiche un récap en temps réel :\n"
-        "• Trades copiés (jour / semaine)\n"
-        "• Volume, win rate, P&L\n"
-        "• Performance par trader suivi\n\n"
-        f"🔗 **Lien :** {url}"
-        f"{note}"
-    )
+        # Derniers trades (max 3)
+        recent = trader_trades[:3]
+        if recent:
+            for rt in recent:
+                side_emoji = "🟢" if rt.side == TradeSide.BUY else "🔴"
+                q = rt.market_question or rt.market_id
+                if len(q) > 30:
+                    q = q[:27] + "..."
+                date_s = rt.created_at.strftime("%d/%m %H:%M")
+                paper = " 📝" if rt.is_paper else ""
+                lines.append(
+                    f"   {side_emoji} {date_s} | {rt.net_amount_usdc:.2f}{paper}"
+                )
+                lines.append(f"      _{q}_")
+        lines.append("")
+
+    text = "\n".join(lines)
+
+    # Telegram message limit is 4096 chars
+    if len(text) > 4000:
+        text = text[:3990] + "\n\n_… tronqué_"
 
     keyboard = [
+        [InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_dashboard")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
     await query.edit_message_text(
