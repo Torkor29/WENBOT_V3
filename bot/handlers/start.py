@@ -83,12 +83,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     welcome_text = (
         "👋 **Bienvenue sur WENPOLYMARKET**\n\n"
-        "Bot Telegram de copy-trading pour Polymarket.\n\n"
-        "🔒 Clés privées chiffrées AES-256\n"
-        "📝 Mode Paper par défaut\n"
-        "💸 Frais : 1% par trade copié\n\n"
-        "Cliquez sur « Accéder au menu principal » pour commencer.\n"
-        "Vous pourrez ensuite configurer votre wallet et vos traders à copier."
+        "Bot Telegram de **copy-trading Polymarket** : vous suivez automatiquement les "
+        "meilleurs traders depuis un wallet dédié.\n\n"
+        "✨ **Fonctionnalités**\n"
+        "• Copy-trading automatique des traders que vous choisissez\n"
+        "• Wallet Polygon dédié au copy-trading\n"
+        "• Suivi des soldes, positions et historique depuis le menu\n\n"
+        "🔐 **Sécurité**\n"
+        "• Clés privées chiffrées AES-256-GCM\n"
+        "• Jamais stockées ni envoyées en clair\n\n"
+        "Cliquez sur « Accéder au menu principal » pour commencer, "
+        "configurer votre wallet et choisir vos traders à copier."
     )
 
     if settings.welcome_banner_url:
@@ -465,6 +470,7 @@ def get_start_handler() -> ConversationHandler:
         entry_points=[CommandHandler("start", start_command)],
         states={
             WELCOME: [
+                CallbackQueryHandler(onboard_menu_main, pattern="^onboard_menu_main$"),
                 CallbackQueryHandler(onboard_start, pattern="^onboard_start$"),
                 CallbackQueryHandler(onboard_info, pattern="^onboard_info$"),
             ],
