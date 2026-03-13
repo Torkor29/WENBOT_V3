@@ -24,58 +24,8 @@ WELCOME, WALLET_CHOICE, WALLET_ADDRESS, PRIVATE_KEY, CONFIRM = range(5)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point — /start."""
-    tg_user = update.effective_user
-
-    async with async_session() as session:
-        user = await get_user_by_telegram_id(session, tg_user.id)
-
-        if user:
-            status = "🟢 Actif" if user.is_active and not user.is_paused else "🟡 Pause" if user.is_paused else "🔴 Inactif"
-            mode = "📝 Paper" if user.paper_trading else "💵 Réel"
-            wallet_short = f"`{user.wallet_address[:6]}...{user.wallet_address[-4:]}`" if user.wallet_address else "Non configuré"
-
-            us = None
-            if user.settings:
-                us = user.settings
-            traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
-
-            text = (
-                f"👋 **{tg_user.first_name}** — Menu principal\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📬 Wallet : {wallet_short}\n"
-                f"{status} • {mode} • **{traders_count}** trader(s) suivi(s)\n"
-            )
-
-            keyboard = [
-                [
-                    InlineKeyboardButton("💰 Soldes", callback_data="menu_balance"),
-                    InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
-                ],
-                [
-                    InlineKeyboardButton("💳 Déposer", callback_data="menu_deposit"),
-                    InlineKeyboardButton("💸 Retirer", callback_data="menu_withdraw"),
-                ],
-                [
-                    InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders"),
-                    InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings"),
-                ],
-                [
-                    InlineKeyboardButton("🌉 Bridge", callback_data="menu_bridge"),
-                    InlineKeyboardButton("📜 Historique", callback_data="menu_history"),
-                ],
-                [
-                    InlineKeyboardButton("❓ Aide", callback_data="menu_help"),
-                ],
-            ]
-
-            await update.message.reply_text(
-                text,
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
-            return ConversationHandler.END
-
-    # New user — welcome with banner + accès direct au menu principal
+    # Message d'accueil unique pour tout le monde (nouveaux et anciens),
+    # avec accès au menu principal via un bouton.
     keyboard = [
         [InlineKeyboardButton("🏠 Accéder au menu principal", callback_data="onboard_menu_main")],
         [InlineKeyboardButton("ℹ️ En savoir plus", callback_data="onboard_info")],
