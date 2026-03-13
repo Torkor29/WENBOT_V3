@@ -1,4 +1,4 @@
-## Polymarket CopyTrading Bot — WENPOLYMARKET
+## WENPOLYMARKET — Polymarket CopyTrading Bot
 
 Bot Telegram de copy-trading pour Polymarket, orienté wallets (multi-masters) et rapidité d'exécution.
 

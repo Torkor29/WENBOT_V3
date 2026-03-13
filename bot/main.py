@@ -1,4 +1,4 @@
-"""Main entry point for the Polymarket CopyTrading bot."""
+"""Main entry point for the WENPOLYMARKET copytrading bot."""
 
 import asyncio
 import logging
@@ -93,7 +93,7 @@ def setup_scheduler(monitor: MultiMasterMonitor) -> AsyncIOScheduler:
 
 async def main() -> None:
     """Initialize database and start the bot."""
-    logger.info("Starting Polymarket CopyTrading Bot...")
+    logger.info("Starting WENPOLYMARKET CopyTrading Bot...")
 
     await init_db()
     logger.info("Database initialized.")

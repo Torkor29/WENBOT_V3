@@ -106,7 +106,7 @@ async def stop_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show help."""
     await update.message.reply_text(
-        "📖 **AIDE — Polymarket CopyTrader**\n"
+        "📖 **AIDE — WENPOLYMARKET**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "**Commandes disponibles :**\n\n"
         "🚀 /start — Inscription / statut (ou utilisez le menu principal)\n"
