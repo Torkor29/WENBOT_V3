@@ -119,9 +119,13 @@ async def onboard_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("🏠 Accéder au menu principal", callback_data="onboard_menu_main")],
+        [
+            InlineKeyboardButton(
+                "🏠 Accéder au menu principal", callback_data="onboard_menu_main"
+            )
+        ],
     ]
-    await query.edit_message_text(
+    await query.message.reply_text(
         "📖 **Comment ça marche ?**\n\n"
         "1️⃣ Vous configurez un wallet Polygon (créé par le bot ou le vôtre)\n"
         "2️⃣ Vous déposez des USDC dessus (carte, exchange ou bridge)\n"
@@ -130,10 +134,7 @@ async def onboard_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "🔐 **Sécurité :**\n"
         "• Clé privée chiffrée AES-256-GCM\n"
         "• Déchiffrée uniquement en mémoire pour signer\n"
-        "• Jamais loguée ni exposée\n\n"
-        "💸 **Frais :** 1% prélevé sur chaque trade copié\n"
-        "📝 Vous commencez en Paper Trading par défaut\n"
-        "💸 Vous pouvez retirer vos fonds à tout moment depuis le bouton « 💸 Retirer » du menu.",
+        "• Jamais loguée ni exposée\n",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -254,7 +255,7 @@ async def onboard_menu_main(
         ]
     )
 
-    await query.edit_message_text(
+    await query.message.reply_text(
         text,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
