@@ -69,7 +69,8 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
             InlineKeyboardButton("❓ Aide", callback_data="menu_help"),
         ],
         [
-            InlineKeyboardButton("📈 Dashboard", callback_data="menu_dashboard"),
+            InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
+            InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
         ],
     ])
 
@@ -505,12 +506,123 @@ async def switch_wallet_callback(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
-# ── Dashboard (rapport in-Telegram) ───────────────
+# ── Dashboard : positions RÉELLES des traders suivis ───
 
 async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Génère un rapport de performance directement dans Telegram.
+    """Dashboard = ce que les traders suivis font réellement sur Polymarket.
 
-    Affiche pour chaque trader suivi : trades jour/semaine, volume, win rate, P&L.
+    Appelle l'API Polymarket pour chaque trader et affiche leurs
+    positions actuelles, P&L, outcome, taille. Permet de vérifier
+    qu'on n'a raté aucun trade.
+    """
+    query = update.callback_query
+    await query.answer("⏳ Chargement des positions…")
+
+    from bot.services.polymarket import polymarket_client
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        followed = us.followed_wallets or []
+
+    if not followed:
+        await query.edit_message_text(
+            "📡 **DASHBOARD — TRADERS SUIVIS**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Aucun trader suivi.\n"
+            "Ajoutez des traders dans ⚙️ Paramètres.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings")],
+                [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+            ]),
+        )
+        return
+
+    lines = [
+        "📡 **DASHBOARD — POSITIONS DES TRADERS**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "_Ce que les traders suivis ont en portefeuille_\n"
+        "_sur Polymarket en ce moment._\n",
+    ]
+
+    total_positions = 0
+    for wallet in followed:
+        w_short = f"{wallet[:6]}...{wallet[-4:]}"
+        positions = await polymarket_client.get_positions_by_address(wallet)
+
+        lines.append(f"👤 `{w_short}` — **{len(positions)}** position(s)")
+
+        if not positions:
+            lines.append("   _Aucune position ouverte_\n")
+            continue
+
+        total_positions += len(positions)
+
+        # Trier par taille décroissante
+        positions.sort(key=lambda p: p.size, reverse=True)
+
+        # P&L global du trader
+        trader_pnl = 0.0
+        for p in positions:
+            if p.avg_price > 0:
+                trader_pnl += (p.current_price - p.avg_price) * p.size
+        pnl_emoji = "🟢" if trader_pnl >= 0 else "🔴"
+        lines.append(f"   {pnl_emoji} P&L global : **{trader_pnl:+.2f} USDC**")
+
+        for p in positions[:8]:  # Max 8 positions par trader
+            pnl_e = "📈" if p.pnl_pct >= 0 else "📉"
+            outcome = p.outcome or "?"
+            # Tronquer l'ID de marché si pas de question lisible
+            market_label = p.market_id[:20] + "..." if len(p.market_id) > 20 else p.market_id
+            val = p.size * p.current_price
+            lines.append(
+                f"   {pnl_e} **{outcome}** @ {p.current_price:.2f} "
+                f"({p.pnl_pct:+.1f}%)"
+            )
+            lines.append(
+                f"      {p.size:.1f} shares • ~{val:.2f} USDC"
+            )
+        if len(positions) > 8:
+            lines.append(f"   _… +{len(positions) - 8} autres positions_")
+        lines.append("")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(
+        f"📊 **Total : {total_positions} positions** "
+        f"sur {len(followed)} trader(s)"
+    )
+    lines.append(
+        "\n_Compare avec 📋 Récap pour vérifier_\n"
+        "_que le bot a bien copié tous les trades._"
+    )
+
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:3990] + "\n\n_… tronqué_"
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_dashboard"),
+            InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
+        ],
+        [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+    ]
+    await query.edit_message_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ── Récap : trades copiés par le bot pour l'utilisateur ───
+
+async def menu_recap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Récap = ce que LE BOT a copié pour l'utilisateur.
+
+    Montre les trades exécutés par trader suivi, avec volume,
+    win rate et P&L. À comparer avec le Dashboard pour voir
+    si rien n'a été raté.
     """
     query = update.callback_query
     await query.answer()
@@ -530,7 +642,6 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=today_start.weekday())
 
-        # Charger tous les trades filled de cet utilisateur
         all_trades = (await session.execute(
             select(Trade).where(
                 Trade.user_id == user.id,
@@ -540,13 +651,11 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not followed:
         await query.edit_message_text(
-            "📈 **DASHBOARD**\n━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Aucun trader suivi.\n"
-            "Ajoutez des traders dans ⚙️ Paramètres pour voir les rapports.",
+            "📋 **RÉCAP — MES COPIES**\n━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Aucun trader suivi.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings")],
-                [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+                [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
             ]),
         )
         return
@@ -577,23 +686,20 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     global_pnl = f"{total_pnl:+.2f}" if closed > 0 else "N/A"
 
     lines = [
-        "📈 **DASHBOARD — RAPPORT DE PERFORMANCE**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n",
+        "📋 **RÉCAP — MES TRADES COPIÉS**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "_Ce que le bot a exécuté pour vous._\n",
         f"📅 Aujourd'hui : **{len(trades_today)}** trades • **{vol_today:.2f}** USDC",
         f"📆 Cette semaine : **{len(trades_week)}** trades • **{vol_week:.2f}** USDC",
-        f"📊 Win rate global : **{global_wr}**",
-        f"💰 P&L global : **{global_pnl} USDC**\n",
+        f"📊 Win rate : **{global_wr}** • P&L : **{global_pnl} USDC**\n",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "**DÉTAIL PAR TRADER COPIÉ**\n",
     ]
-
-    # --- Stats par trader suivi ---
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
-    lines.append("**DÉTAIL PAR TRADER**\n")
 
     for wallet in followed:
         w_short = f"{wallet[:6]}...{wallet[-4:]}"
         w_lower = wallet.lower()
 
-        # Trades de ce trader
         trader_trades = [
             t for t in all_trades
             if t.master_wallet and t.master_wallet.lower() == w_lower
@@ -602,7 +708,7 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         t_week = [t for t in trader_trades if t.created_at >= week_start]
         t_vol = sum(t.gross_amount_usdc for t in trader_trades)
 
-        # Win rate pour ce trader
+        # Win rate par trader
         t_buy_avg: dict[str, list[float]] = {}
         for t in trader_trades:
             if t.side == TradeSide.BUY:
@@ -618,44 +724,46 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 t_closed += 1
                 if pnl > 0:
                     t_wins += 1
-        t_wr = f"{(t_wins / t_closed) * 100:.0f}%" if t_closed > 0 else "N/A"
-        t_pnl_str = f"{t_pnl:+.2f}" if t_closed > 0 else "N/A"
+        t_wr = f"{(t_wins / t_closed) * 100:.0f}%" if t_closed > 0 else "—"
+        t_pnl_str = f"{t_pnl:+.2f}" if t_closed > 0 else "—"
 
         lines.append(f"👤 `{w_short}`")
         lines.append(
-            f"   📅 Jour : {len(t_today)} trades • "
-            f"📆 Sem : {len(t_week)} trades"
+            f"   📅 Jour : {len(t_today)} • 📆 Sem : {len(t_week)} • "
+            f"Vol : {t_vol:.2f}"
         )
-        lines.append(
-            f"   💰 Volume : {t_vol:.2f} USDC • "
-            f"WR : {t_wr} • P&L : {t_pnl_str}"
-        )
+        lines.append(f"   WR : {t_wr} • P&L : {t_pnl_str} USDC")
 
-        # Derniers trades (max 3)
-        recent = trader_trades[:3]
-        if recent:
-            for rt in recent:
-                side_emoji = "🟢" if rt.side == TradeSide.BUY else "🔴"
-                q = rt.market_question or rt.market_id
-                if len(q) > 30:
-                    q = q[:27] + "..."
-                date_s = rt.created_at.strftime("%d/%m %H:%M")
-                paper = " 📝" if rt.is_paper else ""
-                lines.append(
-                    f"   {side_emoji} {date_s} | {rt.net_amount_usdc:.2f}{paper}"
-                )
-                lines.append(f"      _{q}_")
+        # Derniers trades (max 4)
+        for rt in trader_trades[:4]:
+            side_emoji = "🟢" if rt.side == TradeSide.BUY else "🔴"
+            q = rt.market_question or rt.market_id
+            if len(q) > 28:
+                q = q[:25] + "..."
+            date_s = rt.created_at.strftime("%d/%m %H:%M")
+            paper = " 📝" if rt.is_paper else ""
+            lines.append(
+                f"   {side_emoji} {date_s} | "
+                f"{rt.net_amount_usdc:.2f} USDC{paper}"
+            )
+            lines.append(f"      _{q}_")
         lines.append("")
 
-    text = "\n".join(lines)
+    lines.append(
+        "_Compare avec 📡 Dashboard pour vérifier_\n"
+        "_qu'aucun trade n'a été raté._"
+    )
 
-    # Telegram message limit is 4096 chars
+    text = "\n".join(lines)
     if len(text) > 4000:
         text = text[:3990] + "\n\n_… tronqué_"
 
     keyboard = [
-        [InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_dashboard")],
-        [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+        [
+            InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
+            InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_recap"),
+        ],
+        [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
     ]
     await query.edit_message_text(
         text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
@@ -694,6 +802,7 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(menu_history, pattern="^menu_history$"),
         CallbackQueryHandler(menu_help, pattern="^menu_help$"),
         CallbackQueryHandler(menu_dashboard, pattern="^menu_dashboard$"),
+        CallbackQueryHandler(menu_recap, pattern="^menu_recap$"),
         CallbackQueryHandler(menu_switch_wallet, pattern="^menu_switch_wallet$"),
         CallbackQueryHandler(switch_wallet_callback, pattern=r"^switch_wallet_\d+$"),
         CallbackQueryHandler(menu_back, pattern="^menu_back$"),
