@@ -247,7 +247,13 @@ async def onboard_create_wallet(
     private_key = account.key.hex()
 
     async with async_session() as session:
-        user = await create_user(session, tg_user.id, username=tg_user.username)
+        # Si l'utilisateur existe déjà (créé lors de /start ou d'un essai précédent),
+        # on le réutilise pour éviter les doublons.
+        existing = await get_user_by_telegram_id(session, tg_user.id)
+        if existing:
+            user = existing
+        else:
+            user = await create_user(session, tg_user.id, username=tg_user.username)
         await save_wallet(
             session,
             user,
