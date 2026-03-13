@@ -104,3 +104,10 @@ docker compose up --build -d
 
 À partir de là, le message d’accueil `/start` utilisera cette image comme bannière.
 
+
+
+
+Pour voir les logs du VPS :
+cd /opt/wenpolymarket
+docker compose ps
+docker logs -n 80 polybot

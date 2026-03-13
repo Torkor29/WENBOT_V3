@@ -12,6 +12,7 @@ from telegram.ext import (
     filters,
 )
 
+from bot.config import settings
 from bot.db.session import async_session
 from bot.services.user_service import get_user_by_telegram_id, create_user, save_wallet
 
@@ -74,22 +75,36 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             )
             return ConversationHandler.END
 
-    # New user — start onboarding
+    # New user — welcome with banner + accès direct au menu principal
     keyboard = [
-        [InlineKeyboardButton("🚀 Commencer l'inscription", callback_data="onboard_start")],
+        [InlineKeyboardButton("🏠 Accéder au menu principal", callback_data="onboard_menu_main")],
         [InlineKeyboardButton("ℹ️ En savoir plus", callback_data="onboard_info")],
     ]
-    await update.message.reply_text(
-        "👋 **Bienvenue sur Polymarket CopyTrader !**\n\n"
-        "Ce bot vous permet de copier automatiquement les trades "
-        "d'un trader expert sur Polymarket.\n\n"
-        "🔒 Vos clés sont chiffrées AES-256 et jamais stockées en clair.\n"
-        "📝 Vous démarrez en mode Paper Trading (sans fonds réels).\n"
-        "💸 Frais de plateforme : 1% par trade copié.\n\n"
-        "Prêt à commencer ?",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+
+    welcome_text = (
+        "👋 **Bienvenue sur WENPOLYMARKET**\n\n"
+        "Bot Telegram de copy-trading pour Polymarket.\n\n"
+        "🔒 Clés privées chiffrées AES-256\n"
+        "📝 Mode Paper par défaut\n"
+        "💸 Frais : 1% par trade copié\n\n"
+        "Cliquez sur « Accéder au menu principal » pour commencer.\n"
+        "Vous pourrez ensuite configurer votre wallet et vos traders à copier."
     )
+
+    if settings.welcome_banner_url:
+        await update.message.reply_photo(
+            photo=settings.welcome_banner_url,
+            caption=welcome_text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    else:
+        await update.message.reply_text(
+            welcome_text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
     return WELCOME
 
 
@@ -99,7 +114,7 @@ async def onboard_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("🚀 Commencer l'inscription", callback_data="onboard_start")],
+        [InlineKeyboardButton("🏠 Accéder au menu principal", callback_data="onboard_menu_main")],
     ]
     await query.edit_message_text(
         "📖 **Comment ça marche ?**\n\n"
@@ -157,6 +172,89 @@ async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return WALLET_CHOICE
+
+
+async def onboard_menu_main(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Afficher le menu principal depuis l'écran d'accueil (nouvel utilisateur)."""
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            user = await create_user(session, tg_user.id, username=tg_user.username)
+
+        status = "🟢 Actif" if user.is_active and not user.is_paused else "🟡 Pause" if user.is_paused else "🔴 Inactif"
+        mode = "📝 Paper" if user.paper_trading else "💵 Réel"
+        wallet_short = (
+            f"`{user.wallet_address[:6]}...{user.wallet_address[-4:]}`"
+            if user.wallet_address
+            else "Non configuré"
+        )
+
+        us = user.settings
+        traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
+
+    extra = ""
+    if not user.wallet_address:
+        extra = (
+            "\n\n⚠️ Wallet non configuré.\n"
+            "Cliquez sur « 🧭 Configurer mon wallet » pour créer un wallet Polygon "
+            "dédié ou importer le vôtre."
+        )
+
+    text = (
+        f"👋 **{tg_user.first_name}** — Menu principal\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📬 Wallet : {wallet_short}\n"
+        f"{status} • {mode} • **{traders_count}** trader(s) suivi(s)\n"
+        f"{extra}"
+    )
+
+    keyboard = []
+    if not user.wallet_address:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "🧭 Configurer mon wallet", callback_data="onboard_start"
+                )
+            ]
+        )
+
+    keyboard.extend(
+        [
+            [
+                InlineKeyboardButton("💰 Soldes", callback_data="menu_balance"),
+                InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
+            ],
+            [
+                InlineKeyboardButton("💳 Déposer", callback_data="menu_deposit"),
+                InlineKeyboardButton("💸 Retirer", callback_data="menu_withdraw"),
+            ],
+            [
+                InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders"),
+                InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings"),
+            ],
+            [
+                InlineKeyboardButton("🌉 Bridge", callback_data="menu_bridge"),
+                InlineKeyboardButton("📜 Historique", callback_data="menu_history"),
+            ],
+            [
+                InlineKeyboardButton("❓ Aide", callback_data="menu_help"),
+            ],
+        ]
+    )
+
+    await query.edit_message_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return ConversationHandler.END
 
 
 async def onboard_existing_wallet(
