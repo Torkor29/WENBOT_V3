@@ -376,17 +376,20 @@ async def onboard_confirm(
         return ConversationHandler.END
 
     async with async_session() as session:
-        user = await create_user(
-            session, tg_user.id, username=tg_user.username
-        )
+        # Si l'utilisateur existe déjà, on met simplement à jour / enregistre son wallet.
+        existing = await get_user_by_telegram_id(session, tg_user.id)
+        if existing:
+            user = existing
+        else:
+            user = await create_user(session, tg_user.id, username=tg_user.username)
+
         await save_wallet(session, user, wallet_address, private_key, chain="polygon")
         user.wallet_auto_created = False
         await session.commit()
 
         await query.edit_message_text(
-            "🎉 **Inscription réussie !**\n\n"
-            f"🆔 Votre ID : `{user.uuid}`\n"
-            f"📬 Wallet importé : `{wallet_address[:6]}...{wallet_address[-4:]}`\n"
+            "🎉 **Wallet importé avec succès !**\n\n"
+            f"📬 Wallet : `{wallet_address[:6]}...{wallet_address[-4:]}`\n"
             "🔒 Clé privée : chiffrée AES-256 ✅\n"
             "📝 Mode : Paper Trading\n\n"
             "💡 Le bot utilisera les USDC déjà présents sur ce wallet. "
