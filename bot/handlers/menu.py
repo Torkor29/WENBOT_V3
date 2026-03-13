@@ -480,6 +480,21 @@ async def switch_wallet_callback(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
+        # Vérifier que le wallet cible a bien une clé chiffrée
+        if not target.encrypted_key:
+            logger.warning(
+                f"UserWallet {target.id} has no encrypted_key — "
+                f"cannot switch to {target.address[:10]}..."
+            )
+            await query.edit_message_text(
+                "❌ Ce wallet n'a pas de clé privée enregistrée.\n"
+                "Réimportez-le via « Ajouter un wallet ».",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅️ Retour", callback_data="menu_balance")]]
+                ),
+            )
+            return
+
         # Désactiver tous les wallets polygon
         for w in user.wallets:
             if w.chain == "polygon":
@@ -491,6 +506,11 @@ async def switch_wallet_callback(update: Update, context: ContextTypes.DEFAULT_T
         user.encrypted_private_key = target.encrypted_key
         user.wallet_auto_created = target.auto_created
         await session.commit()
+
+        logger.info(
+            f"User {user.telegram_id} switched to wallet "
+            f"{target.address[:10]}... (UserWallet #{target.id})"
+        )
 
         short = f"{target.address[:6]}...{target.address[-4:]}"
 

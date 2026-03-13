@@ -195,8 +195,17 @@ class PolygonClient:
         """Approve a spender to use USDC on behalf of wallet_address."""
         try:
             w3 = self._get_web3()
-            from_addr = w3.to_checksum_address(wallet_address)
+            # Derive address from private key to avoid mismatch
+            from eth_account import Account
+            acct = Account.from_key(private_key)
+            from_addr = w3.to_checksum_address(acct.address)
             spender_addr = w3.to_checksum_address(spender)
+            if from_addr.lower() != wallet_address.lower():
+                logger.warning(
+                    f"Approval address mismatch corrected: "
+                    f"wallet_address={wallet_address[:10]}... "
+                    f"key_address={from_addr[:10]}..."
+                )
 
             def _send_approval():
                 nonce = w3.eth.get_transaction_count(from_addr)
@@ -275,7 +284,7 @@ class PolygonClient:
         """Transfer USDC on Polygon from one address to another.
 
         Args:
-            from_address: Sender wallet address.
+            from_address: Sender wallet address (used as fallback only).
             to_address: Recipient wallet address.
             amount_usdc: Amount in USDC.
             private_key: Sender's decrypted private key.
@@ -285,8 +294,17 @@ class PolygonClient:
         """
         try:
             w3 = self._get_web3()
-            from_addr = w3.to_checksum_address(from_address)
+            # Derive address from private key to avoid mismatch after wallet switch
+            from eth_account import Account
+            acct = Account.from_key(private_key)
+            from_addr = w3.to_checksum_address(acct.address)
             to_addr = w3.to_checksum_address(to_address)
+            if from_addr.lower() != from_address.lower():
+                logger.warning(
+                    f"Wallet address mismatch corrected: "
+                    f"user.wallet_address={from_address[:10]}... "
+                    f"key_address={from_addr[:10]}..."
+                )
             amount_wei = usdc_to_wei(amount_usdc)
 
             def _send_transfer():
