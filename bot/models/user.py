@@ -29,7 +29,9 @@ class User(Base):
         Enum(UserRole), nullable=False, default=UserRole.FOLLOWER
     )
 
-    # Wallet info
+    # Wallet info (héritage pour compatibilité).
+    # Le wallet "actif" pour le copy-trading reste stocké ici, mais des
+    # wallets supplémentaires peuvent être gérés via la table user_wallets.
     wallet_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     wallet_auto_created: Mapped[bool] = mapped_column(Boolean, default=False)
     # Encrypted private key (AES-256-GCM) — NEVER stored in plaintext
@@ -56,6 +58,9 @@ class User(Base):
     settings: Mapped[Optional["UserSettings"]] = relationship(
         "UserSettings", back_populates="user", uselist=False, lazy="selectin"
     )
+    wallets: Mapped[list["UserWallet"]] = relationship(
+        "UserWallet", back_populates="user", lazy="selectin"
+    )
     trades: Mapped[list["Trade"]] = relationship(
         "Trade", back_populates="user", lazy="selectin"
     )
@@ -71,3 +76,4 @@ class User(Base):
 from .settings import UserSettings  # noqa: E402, F401
 from .trade import Trade  # noqa: E402, F401
 from .fee import FeeRecord  # noqa: E402, F401
+from .user_wallet import UserWallet  # noqa: E402, F401

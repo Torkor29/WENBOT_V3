@@ -30,8 +30,9 @@ async def _send_main_menu(message, tg_user, text_override: str | None = None) ->
     header = text_override or (
         f"👋 **{tg_user.first_name}** — Menu principal\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📬 Wallet : {wallet_short}\n"
-        f"{status} • {mode} • **{traders_count}** trader(s) suivi(s)"
+        f"🔷 **Wallet principal (Polygon)** : {wallet_short}\n"
+        f"   🎛️ Statut : {status} • {mode}\n"
+        f"   👥 Traders suivis : **{traders_count}**\n"
     )
 
     keyboard = [

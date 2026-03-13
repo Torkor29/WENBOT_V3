@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models.user import User, UserRole
 from bot.models.settings import UserSettings, SizingMode
+from bot.models.user_wallet import UserWallet
 from bot.services.crypto import encrypt_private_key
 from bot.config import settings
 
@@ -51,16 +52,43 @@ async def save_wallet(
     private_key: str,
     chain: str = "polygon",
 ) -> None:
-    """Encrypt and save a wallet's private key for a user."""
+    """Encrypt and save a wallet's private key for a user.
+
+    Pour compatibilité :
+    - on continue à renseigner les champs historiques sur User
+      (wallet_address, encrypted_private_key, wallet_auto_created),
+    - on crée/maj aussi un enregistrement UserWallet pour gérer plusieurs wallets.
+    """
     encrypted = encrypt_private_key(
         private_key, settings.encryption_key, user.uuid
     )
+
     if chain == "polygon":
+        # Marquer les anciens wallets comme non principaux
+        if user.wallets:
+            for w in user.wallets:
+                if w.chain == "polygon" and w.is_primary:
+                    w.is_primary = False
+
+        # Créer un nouvel enregistrement de wallet comme principal
+        new_wallet = UserWallet(
+            user_id=user.id,
+            chain="polygon",
+            address=wallet_address,
+            auto_created=user.wallet_auto_created,
+            is_primary=True,
+            encrypted_key=encrypted,
+        )
+        session.add(new_wallet)
+
+        # Mettre à jour les champs historiques pour le moteur existant
         user.wallet_address = wallet_address
         user.encrypted_private_key = encrypted
+
     elif chain == "solana":
         user.solana_wallet_address = wallet_address
         user.encrypted_solana_key = encrypted
+
     await session.commit()
 
 
