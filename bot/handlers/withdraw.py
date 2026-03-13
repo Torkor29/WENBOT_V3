@@ -58,7 +58,7 @@ async def withdraw_command(
         matic = await polygon_client.get_matic_balance(user.wallet_address)
 
     if usdc_native < 0.01:
-        await update.message.reply_text(
+        await message.reply_text(
             "💸 **Retrait USDC**\n\n"
             f"Votre solde USDC natif : **{usdc_native:.2f}**\n"
             f"Solde USDC.e (non utilisable) : **{usdc_e:.2f}**\n\n"

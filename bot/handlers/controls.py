@@ -106,28 +106,24 @@ async def stop_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show help."""
     await update.message.reply_text(
-        "📖 **AIDE — WENPOLYMARKET**\n"
+        "❓ **AIDE — WENPOLYMARKET**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "**Commandes disponibles :**\n\n"
-        "🚀 /start — Inscription / statut (ou utilisez le menu principal)\n"
-        "⚙️ Paramètres de copie : bouton « ⚙️ Paramètres » dans le menu\n"
-        "💰 /balance — Soldes et wallet\n"
-        "📊 /positions — Positions ouvertes\n"
-        "📜 /history — Historique des trades\n"
-        "🌉 Bridge SOL → USDC Polygon : bouton « 🌉 Bridge » dans le menu\n"
-        "📈 /stats — Statistiques de performance\n"
-        "⏸️ /pause — Mettre en pause\n"
-        "▶️ /resume — Reprendre\n"
-        "🛑 /stop — Arrêter le copytrading\n"
-        "📖 /help — Cette aide\n\n"
+        "**Menu principal** (le plus simple) :\n"
+        "Tapez /start puis cliquez sur « Accéder au menu principal ».\n"
+        "Tout est accessible depuis les boutons du menu.\n\n"
+        "**Commandes rapides :**\n"
+        "⏸️ /pause — Mettre le copy-trading en pause\n"
+        "▶️ /resume — Reprendre le copy-trading\n"
+        "🛑 /stop — Arrêter complètement\n"
+        "📈 /stats — Vos statistiques\n\n"
         "**Comment ça marche :**\n"
-        "1. Le master trader passe un trade sur Polymarket\n"
-        "2. Le bot détecte et copie automatiquement\n"
-        "3. La taille est adaptée selon vos paramètres\n"
-        "4. Un frais de 1% est prélevé sur chaque trade\n"
-        "5. Vous recevez une notification instantanée\n\n"
-        "🔒 **Sécurité :** Clés chiffrées AES-256, jamais exposées\n"
-        "📝 **Paper Trading :** Activé par défaut (pas de fonds réels)",
+        "1. Configurez un wallet Polygon (menu)\n"
+        "2. Déposez des USDC dessus\n"
+        "3. Choisissez vos traders dans Paramètres\n"
+        "4. Les trades sont copiés automatiquement\n"
+        "5. Frais : 1% par trade copié\n\n"
+        "🔒 Clés chiffrées AES-256 • Jamais exposées en clair\n"
+        "📝 Paper Trading activé par défaut",
         parse_mode="Markdown",
     )
 
@@ -140,7 +136,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text("❌ Compte non trouvé. /start")
             return
 
-        from sqlalchemy import func
+        from sqlalchemy import func, select
         from bot.models.trade import Trade, TradeStatus
         from bot.models.fee import FeeRecord
 

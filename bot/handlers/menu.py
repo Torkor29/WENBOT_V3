@@ -13,29 +13,48 @@ from bot.services.web3_client import polygon_client
 logger = logging.getLogger(__name__)
 
 
-async def _send_main_menu(message, tg_user, text_override: str | None = None) -> None:
-    """Build and send the main menu (reusable)."""
-    async with async_session() as session:
-        user = await get_user_by_telegram_id(session, tg_user.id)
-        if not user:
-            await message.reply_text("❌ Compte non trouvé. Lancez l'inscription avec le bouton ci-dessous.")
-            return
+def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
+    """Build main menu text and keyboard (single source of truth)."""
+    if user.is_active and not user.is_paused:
+        status = "🟢 Actif"
+    elif user.is_paused:
+        status = "🟡 Pause"
+    else:
+        status = "🔴 Inactif"
 
-        status = "🟢 Actif" if user.is_active and not user.is_paused else "🟡 Pause" if user.is_paused else "🔴 Inactif"
-        mode = "📝 Paper" if user.paper_trading else "💵 Réel"
-        wallet_short = f"`{user.wallet_address[:6]}...{user.wallet_address[-4:]}`" if user.wallet_address else "—"
-        us = user.settings
-        traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
+    mode = "📝 Paper" if user.paper_trading else "💵 Réel"
+    wallet_short = (
+        f"`{user.wallet_address[:6]}...{user.wallet_address[-4:]}`"
+        if user.wallet_address
+        else "Non configuré"
+    )
+    us = user.settings
+    traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
 
-    header = text_override or (
-        f"👋 **{tg_user.first_name}** — Menu principal\n"
+    text = (
+        f"**WENPOLYMARKET** — Copy-Trading Polymarket\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔷 **Wallet principal (Polygon)** : {wallet_short}\n"
-        f"   🎛️ Statut : {status} • {mode}\n"
-        f"   👥 Traders suivis : **{traders_count}**\n"
+        f"Bonjour **{tg_user.first_name}** !\n\n"
+        f"📬 Wallet : {wallet_short}\n"
+        f"🎛️ {status} • {mode}\n"
+        f"👥 {traders_count} trader(s) suivi(s)\n"
     )
 
-    keyboard = [
+    if not user.wallet_address:
+        text += (
+            "\n⚠️ **Wallet non configuré** — Cliquez sur "
+            "« 🧭 Configurer mon wallet » pour commencer.\n"
+        )
+
+    keyboard = []
+    if not user.wallet_address:
+        keyboard.append(
+            [InlineKeyboardButton(
+                "🧭 Configurer mon wallet", callback_data="onboard_start"
+            )]
+        )
+
+    keyboard.extend([
         [
             InlineKeyboardButton("👛 Wallets", callback_data="menu_balance"),
             InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
@@ -49,7 +68,24 @@ async def _send_main_menu(message, tg_user, text_override: str | None = None) ->
             InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings"),
         ],
         [InlineKeyboardButton("❓ Aide", callback_data="menu_help")],
-    ]
+    ])
+
+    return text, keyboard
+
+
+async def _send_main_menu(message, tg_user, text_override: str | None = None) -> None:
+    """Build and send the main menu (reusable)."""
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            await message.reply_text(
+                "❌ Compte non trouvé. Lancez /start pour vous inscrire."
+            )
+            return
+
+        text, keyboard = _build_main_menu_content(tg_user, user)
+
+    header = text_override or text
 
     await message.reply_text(
         header, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
@@ -123,12 +159,13 @@ async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     keyboard = [
         [
+            InlineKeyboardButton("💳 Déposer", callback_data="menu_deposit"),
+            InlineKeyboardButton("💸 Retirer", callback_data="menu_withdraw"),
+        ],
+        [
             InlineKeyboardButton(
                 "🧭 Ajouter / changer de wallet", callback_data="onboard_start"
             ),
-        ],
-        [
-            InlineKeyboardButton("💸 Retirer", callback_data="menu_withdraw"),
         ],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
@@ -322,42 +359,24 @@ async def menu_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
 
     text = (
-        "❓ **AIDE — NAVIGATION**\n"
+        "❓ **AIDE — WENPOLYMARKET**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "**Depuis le menu principal :**\n\n"
-        "💰 **Soldes** — Voir USDC, USDC.e et gas\n"
+        "👛 **Wallets** — Voir vos soldes (USDC, POL)\n"
+        "📊 **Positions** — Trades copiés en cours\n"
         "💳 **Déposer** — Carte, exchange, bridge\n"
-        "💸 **Retirer** — Envoyer vos USDC vers un autre wallet / exchange\n"
-        "🌉 **Bridge** — Guide pour bridger SOL/ETH → USDC Polygon\n\n"
-        "📊 **Positions** — Voir les trades copiés en cours\n"
+        "💸 **Retirer** — Envoyer vos USDC ailleurs\n"
         "📜 **Historique** — Derniers trades\n"
-        "👥 **Traders suivis** — Liste des wallets copiés\n"
-        "⚙️ **Paramètres** — Capital, sizing, risques, traders suivis\n\n"
-        "Vous pouvez toujours revenir au menu principal avec le bouton "
-        "« 🏠 Menu principal »."
-    )
-
-    keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
-    await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def menu_wallet_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Explication pour les utilisateurs qui ont déjà de la crypto sur une autre chaîne."""
-    query = update.callback_query
-    await query.answer()
-
-    text = (
-        "🌉 **J'ai de la crypto sur une autre blockchain**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "1️⃣ Commence par **créer ou importer un wallet Polygon** avec les boutons ci-dessus.\n"
-        "   → Tu auras alors une adresse de destination sur Polygon.\n\n"
-        "2️⃣ Ensuite, depuis le menu principal, utilise le bouton « 🌉 Bridge ».\n"
-        "   → Le guide t'explique comment bridger SOL, ETH, USDC... vers ton wallet Polygon.\n\n"
-        "En résumé :\n"
-        "• D'abord une adresse Polygon (wallet dédié ou existant)\n"
-        "• Ensuite seulement, le bridge pour envoyer des fonds dessus."
+        "👥 **Traders suivis** — Wallets copiés\n"
+        "⚙️ **Paramètres** — Capital, sizing, risques, traders\n\n"
+        "**Comment ça marche :**\n"
+        "1. Configurez un wallet Polygon\n"
+        "2. Déposez des USDC dessus\n"
+        "3. Choisissez vos traders dans Paramètres\n"
+        "4. Les trades sont copiés automatiquement\n"
+        "5. Frais : 1% par trade copié\n\n"
+        "🔒 Clés chiffrées AES-256 • Jamais exposées en clair\n"
+        "📝 Paper Trading activé par défaut (sans fonds réels)"
     )
 
     keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
@@ -379,37 +398,10 @@ async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not user:
             return
 
-        status = "🟢 Actif" if user.is_active and not user.is_paused else "🟡 Pause" if user.is_paused else "🔴 Inactif"
-        mode = "📝 Paper" if user.paper_trading else "💵 Réel"
-        wallet_short = f"`{user.wallet_address[:6]}...{user.wallet_address[-4:]}`" if user.wallet_address else "—"
-        us = user.settings
-        traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
-
-    header = (
-        f"👋 **{tg_user.first_name}** — Menu principal\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📬 Wallet : {wallet_short}\n"
-        f"{status} • {mode} • **{traders_count}** trader(s) suivi(s)"
-    )
-
-    keyboard = [
-        [
-            InlineKeyboardButton("👛 Wallets", callback_data="menu_balance"),
-            InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
-        ],
-        [
-            InlineKeyboardButton("💸 Retirer", callback_data="menu_withdraw"),
-            InlineKeyboardButton("📜 Historique", callback_data="menu_history"),
-        ],
-        [
-            InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders"),
-            InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings"),
-        ],
-        [InlineKeyboardButton("❓ Aide", callback_data="menu_help")],
-    ]
+        text, keyboard = _build_main_menu_content(tg_user, user)
 
     await query.edit_message_text(
-        header, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -425,6 +417,5 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(menu_bridge, pattern="^menu_bridge$"),
         CallbackQueryHandler(menu_history, pattern="^menu_history$"),
         CallbackQueryHandler(menu_help, pattern="^menu_help$"),
-        CallbackQueryHandler(menu_wallet_bridge, pattern="^menu_wallet_bridge$"),
         CallbackQueryHandler(menu_back, pattern="^menu_back$"),
     ]

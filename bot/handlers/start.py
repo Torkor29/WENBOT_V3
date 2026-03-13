@@ -133,7 +133,12 @@ async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def onboard_menu_main(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Afficher le menu principal depuis l'écran d'accueil (nouvel utilisateur)."""
+    """Afficher le menu principal depuis l'écran d'accueil (nouvel utilisateur).
+
+    Délègue au menu unifié de menu.py pour éviter toute divergence.
+    """
+    from bot.handlers.menu import _build_main_menu_content
+
     query = update.callback_query
     await query.answer()
 
@@ -144,66 +149,7 @@ async def onboard_menu_main(
         if not user:
             user = await create_user(session, tg_user.id, username=tg_user.username)
 
-        status = "🟢 Actif" if user.is_active and not user.is_paused else "🟡 Pause" if user.is_paused else "🔴 Inactif"
-        mode = "📝 Paper" if user.paper_trading else "💵 Réel"
-        wallet_short = (
-            f"`{user.wallet_address[:6]}...{user.wallet_address[-4:]}`"
-            if user.wallet_address
-            else "Non configuré"
-        )
-
-        us = user.settings
-        traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
-
-    extra = ""
-    if not user.wallet_address:
-        extra = (
-            "\n\n⚠️ Wallet non configuré.\n"
-            "Cliquez sur « 🧭 Configurer mon wallet » pour créer un wallet Polygon "
-            "dédié ou importer le vôtre."
-        )
-
-    text = (
-        f"👋 **{tg_user.first_name}** — Menu principal\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📬 Wallet : {wallet_short}\n"
-        f"{status} • {mode} • **{traders_count}** trader(s) suivi(s)\n"
-        f"{extra}"
-    )
-
-    keyboard = []
-    if not user.wallet_address:
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    "🧭 Configurer mon wallet", callback_data="onboard_start"
-                )
-            ]
-        )
-
-    keyboard.extend(
-        [
-            [
-                InlineKeyboardButton("💰 Soldes", callback_data="menu_balance"),
-                InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
-            ],
-            [
-                InlineKeyboardButton("💳 Déposer", callback_data="menu_deposit"),
-                InlineKeyboardButton("💸 Retirer", callback_data="menu_withdraw"),
-            ],
-            [
-                InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders"),
-                InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings"),
-            ],
-            [
-                InlineKeyboardButton("🌉 Bridge", callback_data="menu_bridge"),
-                InlineKeyboardButton("📜 Historique", callback_data="menu_history"),
-            ],
-            [
-                InlineKeyboardButton("❓ Aide", callback_data="menu_help"),
-            ],
-        ]
-    )
+        text, keyboard = _build_main_menu_content(tg_user, user)
 
     await query.message.reply_text(
         text,
@@ -270,18 +216,22 @@ async def onboard_create_wallet(
     ]
     await query.edit_message_text(
         "🎉 **Wallet Polygon dédié créé !**\n\n"
-        f"📬 Adresse : `{wallet_address}`\n"
-        f"🔑 Clé privée : `{private_key}`\n\n"
-        "⚠️ **Important :**\n"
-        "• Sauvegardez cette clé privée dans un endroit sûr (gestionnaire de mots de passe, note chiffrée, etc.).\n"
-        "• Le bot ne vous la réaffichera plus.\n\n"
-        "Ce wallet est vide au départ. Pour copier des trades, "
-        "vous devez d'abord y déposer des **USDC**.\n\n"
-        "Depuis le menu principal, utilisez « 💳 Déposer » — le bot vous guide pour :\n"
-        "• 💳 Acheter des USDC par carte bancaire\n"
-        "• 🏦 Envoyer depuis un exchange (Binance, etc.)\n"
-        "• 🌉 Bridger du SOL ou de l'ETH vers ce wallet\n\n"
-        "Puis cliquez sur « ⚙️ Paramètres » pour choisir quels traders copier.",
+        f"📬 Adresse :\n`{wallet_address}`\n\n"
+        f"🔑 Clé privée :\n`{private_key}`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔐 **SAUVEGARDEZ CETTE CLÉ MAINTENANT**\n\n"
+        "• Copiez-la dans un **gestionnaire de mots de passe** "
+        "(Bitwarden, 1Password, etc.) ou une **note chiffrée**.\n"
+        "• **Ce message ne sera plus jamais affiché.**\n"
+        "• Sans cette clé, vous ne pourrez pas récupérer "
+        "vos fonds en dehors du bot.\n\n"
+        "🔒 **Sécurité :** La clé est stockée **chiffrée (AES-256-GCM)** "
+        "sur nos serveurs pour signer vos trades automatiquement. "
+        "Elle n'est jamais visible en clair après cet écran.\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "**Prochaines étapes :**\n"
+        "1. « 💳 Déposer » — Alimenter le wallet en USDC\n"
+        "2. « ⚙️ Paramètres » — Choisir vos traders à copier",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -334,6 +284,7 @@ async def receive_private_key(
 ) -> int:
     """Receive private key — encrypt immediately, delete message."""
     private_key = update.message.text.strip()
+    chat = update.effective_chat
 
     # Delete the message containing the private key IMMEDIATELY
     try:
@@ -341,9 +292,9 @@ async def receive_private_key(
     except Exception:
         pass  # Bot may not have delete permissions
 
-    # Basic validation
+    # Basic validation (use chat.send_message since original message may be deleted)
     if len(private_key) < 32:
-        await update.message.reply_text(
+        await chat.send_message(
             "❌ Clé privée trop courte. Réessayez :",
         )
         return PRIVATE_KEY
@@ -357,10 +308,10 @@ async def receive_private_key(
             InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel"),
         ]
     ]
-    await update.effective_chat.send_message(
+    await chat.send_message(
         "📋 **Résumé de l'inscription**\n\n"
         f"📬 Wallet : `{wallet[:6]}...{wallet[-4:]}`\n"
-        "🔑 Clé privée : ✅ Reçue (sera chiffrée)\n"
+        "🔑 Clé privée : ✅ Reçue (sera chiffrée AES-256)\n"
         "📝 Mode : Paper Trading (défaut)\n"
         "💸 Frais : 1% par trade copié\n\n"
         "Confirmer l'inscription ?",
@@ -403,14 +354,14 @@ async def onboard_confirm(
         await query.edit_message_text(
             "🎉 **Wallet importé avec succès !**\n\n"
             f"📬 Wallet : `{wallet_address[:6]}...{wallet_address[-4:]}`\n"
-            "🔒 Clé privée : chiffrée AES-256 ✅\n"
-            "📝 Mode : Paper Trading\n\n"
-            "💡 Pour l'alimenter, envoie simplement des USDC sur cette adresse "
-            "depuis ton exchange ou via un bridge. Tu peux toujours retrouver "
-            "l'adresse complète dans l'onglet « 👛 Wallets ».\n\n"
+            "🔒 Clé privée : chiffrée AES-256-GCM ✅\n"
+            "📝 Mode : Paper Trading (par défaut)\n\n"
+            "🔐 Votre clé est stockée **chiffrée** et utilisée uniquement "
+            "pour signer vos trades automatiquement. Elle n'est jamais "
+            "visible en clair.\n\n"
             "**Prochaines étapes :**\n"
-            "• Onglet « 👛 Wallets » — Voir ton wallet principal et les soldes\n"
-            "• Onglet « ⚙️ Paramètres » — Choisir quels traders copier",
+            "1. « 👛 Wallets » — Voir votre wallet et vos soldes\n"
+            "2. « ⚙️ Paramètres » — Choisir quels traders copier",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
