@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # Exemple : https://polygon-mainnet.g.alchemy.com/v2/VOTRE_CLE
     polygon_rpc_url: str = ""
 
+    # UI / Branding
+    # URL d'une bannière (logo) pour le message d'accueil Telegram
+    welcome_banner_url: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
