@@ -58,12 +58,14 @@ async def withdraw_command(
         matic = await polygon_client.get_matic_balance(user.wallet_address)
 
     if usdc_native < 0.01:
+        keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
         await message.reply_text(
             "💸 **Retrait USDC**\n\n"
             f"Votre solde USDC natif : **{usdc_native:.2f}**\n"
             f"Solde USDC.e (non utilisable) : **{usdc_e:.2f}**\n\n"
             "Rien à retirer pour le moment. Swappez d'abord vos USDC.e en USDC natif sur Polygon.",
             parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return ConversationHandler.END
 

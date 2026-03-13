@@ -299,8 +299,11 @@ async def _deposit_copy_address(
     async with async_session() as session:
         user = await get_user_by_telegram_id(session, update.effective_user.id)
         if user and user.wallet_address:
+            keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
             await query.message.reply_text(
-                f"`{user.wallet_address}`", parse_mode="Markdown"
+                f"`{user.wallet_address}`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
             )
         else:
             await query.answer("Wallet non configuré", show_alert=True)

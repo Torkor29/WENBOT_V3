@@ -92,11 +92,13 @@ async def positions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         trades = result.scalars().all()
 
     if not trades:
+        keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
         await update.message.reply_text(
             "📊 **Positions actives**\n\n"
             "Aucune position ouverte pour le moment.\n"
             "Les trades seront copiés automatiquement quand le master tradera.",
             parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
 
@@ -113,8 +115,11 @@ async def positions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"Shares: {t.shares:.1f}\n"
         )
 
+    keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
     await update.message.reply_text(
-        "\n".join(lines), parse_mode="Markdown"
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -145,9 +150,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ) or 0.0
 
     if not trades:
+        keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
         await update.message.reply_text(
             "📜 **Historique des trades**\n\nAucun trade enregistré.",
             parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
 
@@ -180,8 +187,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     lines.append(f"\n💸 **Total frais payés : {total_fees:.2f} USDC**")
 
+    keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
     await update.message.reply_text(
-        "\n".join(lines), parse_mode="Markdown"
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 

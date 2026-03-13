@@ -326,10 +326,14 @@ async def setting_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     label = SETTING_LABELS.get(field, (field, ""))[0]
     context.user_data["editing_field"] = field
 
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Retour", callback_data="set_back_main")],
+    ]
     await query.edit_message_text(
         f"✏️ **Modifier : {label}**\n\n"
         "Envoyez la nouvelle valeur :",
         parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return EDIT_VALUE
 
@@ -381,11 +385,15 @@ async def follow_add_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     await query.answer()
 
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Retour", callback_data="set_back_main")],
+    ]
     await query.edit_message_text(
         "➕ **Ajouter un trader à suivre**\n\n"
         "Envoyez l'adresse Polygon (0x...) du trader à copier :\n\n"
         "💡 Vous pouvez la trouver sur le profil Polymarket du trader.",
         parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return ADD_WALLET
 
@@ -591,9 +599,11 @@ def get_settings_handler() -> ConversationHandler:
                 CallbackQueryHandler(setting_selected, pattern="^set_"),
             ],
             EDIT_VALUE: [
+                CallbackQueryHandler(setting_selected, pattern="^set_back_main$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_setting_value),
             ],
             ADD_WALLET: [
+                CallbackQueryHandler(setting_selected, pattern="^set_back_main$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, follow_add_receive),
             ],
         },

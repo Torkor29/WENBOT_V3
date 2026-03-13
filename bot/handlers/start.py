@@ -166,11 +166,15 @@ async def onboard_existing_wallet(
     query = update.callback_query
     await query.answer()
 
+    keyboard = [
+        [InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")],
+    ]
     await query.edit_message_text(
         "📬 **Étape 1/2 — Adresse Wallet**\n\n"
         "Envoyez votre adresse wallet **Polygon** (0x...).\n\n"
         "⚠️ Cette adresse sera utilisée pour le trading sur Polymarket.",
         parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
     return WALLET_ADDRESS
 
@@ -248,12 +252,17 @@ async def receive_wallet_address(
     """Receive and validate wallet address."""
     address = update.message.text.strip()
 
+    cancel_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")]]
+    )
+
     # Basic validation
     if not address.startswith("0x") or len(address) != 42:
         await update.message.reply_text(
             "❌ Adresse invalide. Elle doit commencer par `0x` "
             "et faire 42 caractères.\n\nRéessayez :",
             parse_mode="Markdown",
+            reply_markup=cancel_kb,
         )
         return WALLET_ADDRESS
 
@@ -263,6 +272,7 @@ async def receive_wallet_address(
     except ValueError:
         await update.message.reply_text(
             "❌ Adresse invalide — caractères non-hexadécimaux détectés.\n\nRéessayez :",
+            reply_markup=cancel_kb,
         )
         return WALLET_ADDRESS
 
@@ -275,6 +285,7 @@ async def receive_wallet_address(
         "et le message sera supprimé.\n\n"
         "⚠️ Ne partagez JAMAIS votre clé privée ailleurs.",
         parse_mode="Markdown",
+        reply_markup=cancel_kb,
     )
     return PRIVATE_KEY
 
@@ -292,10 +303,15 @@ async def receive_private_key(
     except Exception:
         pass  # Bot may not have delete permissions
 
+    cancel_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")]]
+    )
+
     # Basic validation (use chat.send_message since original message may be deleted)
     if len(private_key) < 32:
         await chat.send_message(
             "❌ Clé privée trop courte. Réessayez :",
+            reply_markup=cancel_kb,
         )
         return PRIVATE_KEY
 
@@ -376,16 +392,30 @@ async def onboard_confirm(
 async def onboard_cancel(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Cancel registration."""
+    """Cancel registration and return to main menu."""
+    from bot.handlers.menu import _build_main_menu_content
+
     query = update.callback_query
     await query.answer()
 
     context.user_data.pop("wallet_address", None)
     context.user_data.pop("private_key", None)
 
-    await query.edit_message_text(
-        "❌ Inscription annulée.\n\nVous pouvez relancer /start à tout moment."
-    )
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if user:
+            text, keyboard = _build_main_menu_content(tg_user, user)
+            await query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Inscription annulée.\n\nVous pouvez relancer /start à tout moment."
+            )
+
     return ConversationHandler.END
 
 
@@ -412,9 +442,11 @@ def get_start_handler() -> ConversationHandler:
                 CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
             ],
             WALLET_ADDRESS: [
+                CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_wallet_address),
             ],
             PRIVATE_KEY: [
+                CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_private_key),
             ],
             CONFIRM: [

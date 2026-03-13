@@ -125,9 +125,11 @@ async def bridge_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     # Adresse Polygon en message séparé pour faciliter le copier/coller
+    keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
     await target.reply_text(
         f"📬 **Adresse Polygon de destination :**\n`{poly_wallet}`",
         parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 

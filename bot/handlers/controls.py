@@ -20,7 +20,11 @@ async def pause_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         if user.is_paused:
-            await update.message.reply_text("⏸️ Le copytrading est déjà en pause.")
+            keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
+            await update.message.reply_text(
+                "⏸️ Le copytrading est déjà en pause.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
             return
 
         user.is_paused = True
@@ -46,7 +50,11 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
 
         if not user.is_paused:
-            await update.message.reply_text("▶️ Le copytrading est déjà actif.")
+            keyboard = [[InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")]]
+            await update.message.reply_text(
+                "▶️ Le copytrading est déjà actif.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
             return
 
         user.is_paused = False
