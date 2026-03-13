@@ -36,6 +36,10 @@ async def init_db() -> None:
             # user_settings: mode de suivi des masters (Gamma vs WebSocket)
             "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS use_gamma_monitor BOOLEAN DEFAULT true",
             "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS use_ws_monitor BOOLEAN DEFAULT false",
+            # user_settings: stop-loss / take-profit toggles
+            "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS stop_loss_enabled BOOLEAN DEFAULT true",
+            "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS take_profit_enabled BOOLEAN DEFAULT false",
+            "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS take_profit_pct FLOAT DEFAULT 50.0",
         ]
         for stmt in migrations:
             await conn.execute(text(stmt))
