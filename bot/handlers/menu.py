@@ -36,7 +36,7 @@ async def _send_main_menu(message, tg_user, text_override: str | None = None) ->
 
     keyboard = [
         [
-            InlineKeyboardButton("💰 Soldes", callback_data="menu_balance"),
+            InlineKeyboardButton("👛 Wallets", callback_data="menu_balance"),
             InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
         ],
         [
@@ -68,40 +68,6 @@ async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     async with async_session() as session:
         user = await get_user_by_telegram_id(session, query.from_user.id)
         if not user:
-            return
-
-        # Si aucun wallet Polygon n'est configuré, proposer import / création
-        if not user.wallet_address:
-            text = (
-                "💰 **SOLDES & PORTEFEUILLE**\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Tu n'as pas encore de **wallet Polygon** configuré pour le copy-trading.\n\n"
-                "Choisis une option :\n"
-                "• 📩 *J'ai déjà un wallet Polygon* → importer ton wallet existant\n"
-                "• 🆕 *Me créer un wallet Polygon* → le bot génère un wallet dédié\n"
-            )
-
-            keyboard = [
-                [
-                    InlineKeyboardButton(
-                        "📩 J'ai déjà un wallet Polygon",
-                        callback_data="menu_wallet_import",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        "🆕 Me créer un wallet Polygon",
-                        callback_data="menu_wallet_create",
-                    )
-                ],
-                [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
-            ]
-
-            await query.edit_message_text(
-                text,
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
             return
 
         from bot.models.trade import Trade, TradeStatus
@@ -422,7 +388,7 @@ async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     keyboard = [
         [
-            InlineKeyboardButton("💰 Soldes", callback_data="menu_balance"),
+            InlineKeyboardButton("👛 Wallets", callback_data="menu_balance"),
             InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
         ],
         [
