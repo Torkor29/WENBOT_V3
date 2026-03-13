@@ -12,6 +12,7 @@ RETRY_BACKOFF_S = 1.0
 
 CLOB_HOST = "https://clob.polymarket.com"
 GAMMA_HOST = "https://gamma-api.polymarket.com"
+DATA_HOST = "https://data-api.polymarket.com"
 
 
 @dataclass
@@ -37,6 +38,20 @@ class Position:
 
 
 @dataclass
+class Activity:
+    timestamp: int
+    market_id: str
+    title: str
+    outcome: str
+    side: str
+    size: float
+    usdc_size: float
+    price: float
+    tx_hash: str
+    slug: str
+
+
+@dataclass
 class OrderResult:
     success: bool
     order_id: Optional[str] = None
@@ -51,9 +66,46 @@ class PolymarketClient:
     def __init__(self) -> None:
         # Cache markets by conditionId (market_id)
         self._market_cache: dict[str, MarketInfo] = {}
+        # Persistent HTTP client for connection pooling (massive speed gain)
+        self._http: Optional["httpx.AsyncClient"] = None
+        # Cache CLOB clients per private key hash to avoid re-deriving API creds
+        self._clob_cache: dict[str, "ClobClient"] = {}
+
+    async def _get_http(self) -> "httpx.AsyncClient":
+        """Return a persistent httpx client with connection pooling."""
+        import httpx
+
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(
+                timeout=10,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=20,
+                    keepalive_expiry=120,
+                ),
+                http2=True,
+            )
+        return self._http
+
+    async def close(self) -> None:
+        """Close the persistent HTTP client."""
+        if self._http and not self._http.is_closed:
+            await self._http.aclose()
+            self._http = None
 
     def create_user_client(self, private_key: str) -> "ClobClient":
-        """Create a CLOB client for a specific user (follower) to sign orders."""
+        """Return a CLOB client for a user, cached to avoid re-deriving API creds.
+
+        derive_api_creds is SLOW (~200-400ms) — caching saves this on every trade.
+        """
+        import hashlib
+
+        cache_key = hashlib.sha256(private_key.encode()).hexdigest()[:16]
+
+        cached = self._clob_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         from py_clob_client.client import ClobClient
 
         client = ClobClient(
@@ -63,6 +115,7 @@ class PolymarketClient:
         )
         creds = client.create_or_derive_api_creds()
         client.set_api_creds(creds)
+        self._clob_cache[cache_key] = client
         return client
 
     async def ensure_allowances(self, private_key: str) -> bool:
@@ -89,75 +142,151 @@ class PolymarketClient:
             )
 
     async def get_positions_by_address(self, wallet_address: str) -> list[Position]:
-        """Fetch positions for any public wallet address via the Gamma API.
+        """Fetch positions for any public wallet address via the Data API.
 
         No private key or API credentials needed — this is public data.
         Retries up to MAX_RETRIES times on network errors.
+        Falls back to Gamma API if Data API fails.
         """
-        import httpx
-
         last_err: Optional[Exception] = None
+
+        # Try Data API first (correct endpoint)
         for attempt in range(MAX_RETRIES + 1):
             try:
-                async with httpx.AsyncClient(timeout=15) as http:
-                    resp = await http.get(
-                        f"{GAMMA_HOST}/positions",
-                        params={"user": wallet_address.lower()},
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
+                http = await self._get_http()
+                resp = await http.get(
+                    f"{DATA_HOST}/positions",
+                    params={
+                        "user": wallet_address.lower(),
+                        "sizeThreshold": 0,
+                        "limit": 500,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-                positions = []
-                for p in data:
-                    size = float(p.get("size", 0))
-                    if size <= 0:
-                        continue
-
-                    avg_price = float(p.get("avgPrice", 0))
-                    current_price = float(p.get("currentPrice", avg_price))
-                    pnl_pct = 0.0
-                    if avg_price > 0:
-                        pnl_pct = ((current_price - avg_price) / avg_price) * 100
-
-                    positions.append(Position(
-                        market_id=p.get("conditionId", p.get("marketId", "")),
-                        token_id=p.get("asset", p.get("tokenId", "")),
-                        outcome=p.get("outcome", ""),
-                        size=size,
-                        avg_price=avg_price,
-                        current_price=current_price,
-                        pnl_pct=pnl_pct,
-                    ))
-
-                return positions
+                return self._parse_positions(data)
 
             except Exception as e:
                 last_err = e
                 if attempt < MAX_RETRIES:
                     logger.warning(
                         f"Retry {attempt + 1}/{MAX_RETRIES} fetching positions "
-                        f"for {wallet_address[:10]}...: {e}"
+                        f"(Data API) for {wallet_address[:10]}...: {e}"
                     )
                     await asyncio.sleep(RETRY_BACKOFF_S * (attempt + 1))
 
-        logger.error(f"Failed to fetch positions for {wallet_address[:10]}...: {last_err}")
-        return []
+        # Fallback: try Gamma API (legacy)
+        logger.warning(
+            f"Data API failed for {wallet_address[:10]}..., trying Gamma API fallback"
+        )
+        try:
+            http = await self._get_http()
+            resp = await http.get(
+                f"{GAMMA_HOST}/positions",
+                params={"user": wallet_address.lower()},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return self._parse_positions(data)
+        except Exception as e2:
+            logger.error(
+                f"Failed to fetch positions for {wallet_address[:10]}... "
+                f"(Data API: {last_err}, Gamma fallback: {e2})"
+            )
+            return []
+
+    def _parse_positions(self, data: list) -> list[Position]:
+        """Parse position data from either Data API or Gamma API response."""
+        positions = []
+        for p in data:
+            size = float(p.get("size", 0))
+            if size <= 0:
+                continue
+
+            avg_price = float(p.get("avgPrice", 0))
+            current_price = float(p.get("currentPrice", avg_price))
+            pnl_pct = 0.0
+            if avg_price > 0:
+                pnl_pct = ((current_price - avg_price) / avg_price) * 100
+
+            positions.append(Position(
+                market_id=p.get("conditionId", p.get("marketId", "")),
+                token_id=p.get("asset", p.get("tokenId", "")),
+                outcome=p.get("outcome", ""),
+                size=size,
+                avg_price=avg_price,
+                current_price=current_price,
+                pnl_pct=pnl_pct,
+            ))
+        return positions
+
+    async def get_activity_by_address(
+        self,
+        wallet_address: str,
+        limit: int = 100,
+        start: Optional[int] = None,
+        side: Optional[str] = None,
+    ) -> list[Activity]:
+        """Fetch recent trading activity for a public wallet via Data API.
+
+        Args:
+            wallet_address: Public wallet/proxy address.
+            limit: Max results (default 100, max 500).
+            start: Unix timestamp — only return activity after this time.
+            side: Filter by BUY or SELL.
+        """
+        try:
+            params: dict = {
+                "user": wallet_address.lower(),
+                "limit": min(limit, 500),
+                "type": "TRADE",
+            }
+            if start:
+                params["start"] = start
+            if side:
+                params["side"] = side.upper()
+
+            http = await self._get_http()
+            resp = await http.get(f"{DATA_HOST}/activity", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            activities: list[Activity] = []
+            for a in data:
+                activities.append(Activity(
+                    timestamp=int(a.get("timestamp", 0)),
+                    market_id=a.get("conditionId", ""),
+                    title=a.get("title", ""),
+                    outcome=a.get("outcome", ""),
+                    side=a.get("side", ""),
+                    size=float(a.get("size", 0)),
+                    usdc_size=float(a.get("usdcSize", 0)),
+                    price=float(a.get("price", 0)),
+                    tx_hash=a.get("transactionHash", ""),
+                    slug=a.get("slug", ""),
+                ))
+            return activities
+
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch activity for {wallet_address[:10]}...: {e}"
+            )
+            return []
 
     async def get_markets(
         self, limit: int = 50, category: Optional[str] = None
     ) -> list[MarketInfo]:
         """Fetch active markets from Polymarket Gamma API."""
-        import httpx
-
         try:
             params = {"limit": limit, "active": True, "closed": False}
             if category:
                 params["tag"] = category
 
-            async with httpx.AsyncClient(timeout=15) as http:
-                resp = await http.get(f"{GAMMA_HOST}/markets", params=params)
-                resp.raise_for_status()
-                data = resp.json()
+            http = await self._get_http()
+            resp = await http.get(f"{GAMMA_HOST}/markets", params=params)
+            resp.raise_for_status()
+            data = resp.json()
 
             markets: list[MarketInfo] = []
             for m in data:
@@ -319,33 +448,29 @@ class PolymarketClient:
 
     async def get_order_book(self, token_id: str) -> dict:
         """Get the order book for a token."""
-        import httpx
-
         try:
-            async with httpx.AsyncClient(timeout=10) as http:
-                resp = await http.get(
-                    f"{CLOB_HOST}/book",
-                    params={"token_id": token_id},
-                )
-                resp.raise_for_status()
-                return resp.json()
+            http = await self._get_http()
+            resp = await http.get(
+                f"{CLOB_HOST}/book",
+                params={"token_id": token_id},
+            )
+            resp.raise_for_status()
+            return resp.json()
         except Exception as e:
             logger.error(f"Failed to get order book: {e}")
             return {"bids": [], "asks": []}
 
     async def get_price(self, token_id: str, side: str = "BUY") -> float:
         """Get the current best price for a token via the order book."""
-        import httpx
-
         try:
-            async with httpx.AsyncClient(timeout=10) as http:
-                resp = await http.get(
-                    f"{CLOB_HOST}/midpoint",
-                    params={"token_id": token_id},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return float(data.get("mid", 0))
+            http = await self._get_http()
+            resp = await http.get(
+                f"{CLOB_HOST}/midpoint",
+                params={"token_id": token_id},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return float(data.get("mid", 0))
         except Exception as e:
             logger.error(f"Failed to get price for {token_id}: {e}")
             return 0.0

@@ -39,11 +39,14 @@ logger = logging.getLogger(__name__)
 
 
 class CopyTradeEngine:
-    """Main copytrade orchestrator."""
+    """Main copytrade orchestrator — optimized for sub-second execution."""
 
     def __init__(self, telegram_bot=None):
         self._bot = telegram_bot
         self._master_portfolio_usdc: float = 10000.0
+        # Cache master portfolio values (refreshed each signal)
+        self._portfolio_cache: dict[str, tuple[float, float]] = {}  # wallet -> (value, timestamp)
+        _PORTFOLIO_CACHE_TTL = 30  # seconds
 
     async def handle_signal(self, signal: TradeSignal) -> None:
         """Process a trade signal — only for followers of signal.master_wallet."""
@@ -105,14 +108,29 @@ class CopyTradeEngine:
                 if user_settings.copy_delay_seconds > 0:
                     await asyncio.sleep(user_settings.copy_delay_seconds)
 
-                # Calculate trade size
-                onchain_balance = await polygon_client.get_usdc_balance(
-                    user.wallet_address or ""
+                # ── SPEED: decrypt PK once, reuse everywhere ──
+                pk = decrypt_private_key(
+                    user.encrypted_private_key,
+                    settings.encryption_key,
+                    user.uuid,
                 )
+
+                # ── SPEED: fetch balances in parallel ──
                 if user.paper_trading:
-                    balance = user_settings.allocated_capital
+                    onchain_balance = user_settings.allocated_capital
+                    matic_balance = 1.0  # not needed for paper
                 else:
-                    balance = onchain_balance
+                    usdc_task = polygon_client.get_usdc_balance(
+                        user.wallet_address or ""
+                    )
+                    matic_task = polygon_client.get_matic_balance(
+                        user.wallet_address or ""
+                    )
+                    onchain_balance, matic_balance = await asyncio.gather(
+                        usdc_task, matic_task
+                    )
+
+                balance = onchain_balance
 
                 try:
                     gross_amount = calculate_trade_size(
@@ -137,21 +155,11 @@ class CopyTradeEngine:
                     )
                     return
 
-                # Liquidity / spread check (skip for paper trading)
+                # ── SPEED: skip spread check for speed (market orders fill at best) ──
+                # Spread check only logs a warning now instead of blocking
                 if not user.paper_trading and signal.side == "BUY":
-                    spread = await self._check_spread(signal.token_id)
-                    if spread is not None and spread > 0.05:
-                        logger.warning(
-                            f"User {user.telegram_id}: spread {spread:.1%} too wide "
-                            f"for {signal.token_id[:12]}..., skipping"
-                        )
-                        await self._notify_error(
-                            user,
-                            signal,
-                            f"Trade ignoré : spread trop large ({spread:.1%} > 5%). "
-                            "Le marché manque de liquidité.",
-                        )
-                        return
+                    # Fire-and-forget spread log (don't block execution)
+                    asyncio.create_task(self._log_spread(signal.token_id, user.telegram_id))
 
                 # For real trading: balance checks + one-time Polymarket approval
                 if not user.paper_trading:
@@ -164,9 +172,6 @@ class CopyTradeEngine:
                         )
                         return
 
-                    matic_balance = await polygon_client.get_matic_balance(
-                        user.wallet_address or ""
-                    )
                     if matic_balance < 0.01:
                         await self._notify_error(
                             user,
@@ -178,13 +183,7 @@ class CopyTradeEngine:
 
                     # One-time: approve USDC for Polymarket contracts
                     if not user.polymarket_approved:
-                        pk = decrypt_private_key(
-                            user.encrypted_private_key,
-                            settings.encryption_key,
-                            user.uuid,
-                        )
                         approved = await polymarket_client.ensure_allowances(pk)
-                        del pk
                         if not approved:
                             await self._notify_error(
                                 user,
@@ -240,11 +239,6 @@ class CopyTradeEngine:
                 elif settings.collect_fees_onchain and settings.fees_wallet:
                     # Optional on-chain fee transfer (slower, can be toggled off for speed)
                     try:
-                        pk = decrypt_private_key(
-                            user.encrypted_private_key,
-                            settings.encryption_key,
-                            user.uuid,
-                        )
                         transfer_result = await polygon_client.transfer_usdc(
                             from_address=user.wallet_address,
                             to_address=settings.fees_wallet,
@@ -299,11 +293,6 @@ class CopyTradeEngine:
                     trade.tx_hash = "paper_trade_simulated"
                 else:
                     try:
-                        pk = decrypt_private_key(
-                            user.encrypted_private_key,
-                            settings.encryption_key,
-                            user.uuid,
-                        )
                         order_result = await polymarket_client.place_market_order(
                             private_key=pk,
                             token_id=signal.token_id,
@@ -405,18 +394,37 @@ class CopyTradeEngine:
         return True
 
     async def _compute_master_portfolio(self, master_wallet: str) -> float:
-        """Estimate the master's portfolio value in USDC from current positions."""
+        """Estimate the master's portfolio value in USDC — cached for 30s."""
+        cached = self._portfolio_cache.get(master_wallet)
+        if cached:
+            value, ts = cached
+            if time.monotonic() - ts < 30:
+                return value
+
         try:
             positions = await polymarket_client.get_positions_by_address(master_wallet)
             total = sum(p.size * p.current_price for p in positions)
             if total <= 0:
-                return self._master_portfolio_usdc
+                total = self._master_portfolio_usdc
+            self._portfolio_cache[master_wallet] = (total, time.monotonic())
             return total
         except Exception as e:
             logger.error(
                 f"Failed to compute master portfolio for {master_wallet[:10]}...: {e}"
             )
             return self._master_portfolio_usdc
+
+    async def _log_spread(self, token_id: str, tg_id: int) -> None:
+        """Fire-and-forget spread logging — does NOT block trade execution."""
+        try:
+            spread = await self._check_spread(token_id)
+            if spread is not None and spread > 0.05:
+                logger.warning(
+                    f"User {tg_id}: spread {spread:.1%} wide for "
+                    f"{token_id[:12]}... (trade still executed)"
+                )
+        except Exception:
+            pass  # Never block for spread logging
 
     async def _check_spread(self, token_id: str) -> Optional[float]:
         """Check the bid-ask spread for a token. Returns spread as a fraction (0.05 = 5%)."""

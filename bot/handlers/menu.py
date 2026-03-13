@@ -511,14 +511,15 @@ async def switch_wallet_callback(update: Update, context: ContextTypes.DEFAULT_T
 async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Dashboard = ce que les traders suivis font réellement sur Polymarket.
 
-    Appelle l'API Polymarket pour chaque trader et affiche leurs
-    positions actuelles, P&L, outcome, taille. Permet de vérifier
+    Appelle l'API Polymarket (Data API) pour chaque trader et affiche
+    positions actuelles + trades récents (24h). Permet de vérifier
     qu'on n'a raté aucun trade.
     """
     query = update.callback_query
     await query.answer("⏳ Chargement des positions…")
 
     from bot.services.polymarket import polymarket_client
+    import time
 
     async with async_session() as session:
         user = await get_user_by_telegram_id(session, query.from_user.id)
@@ -542,56 +543,77 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     lines = [
-        "📡 **DASHBOARD — POSITIONS DES TRADERS**\n"
+        "📡 **DASHBOARD — TRADERS SUIVIS**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "_Ce que les traders suivis ont en portefeuille_\n"
-        "_sur Polymarket en ce moment._\n",
+        "_Positions & trades des comptes suivis_\n"
+        "_sur Polymarket en temps réel._\n",
     ]
 
     total_positions = 0
+    total_trades_24h = 0
+    since_24h = int(time.time()) - 86400
+
     for wallet in followed:
         w_short = f"{wallet[:6]}...{wallet[-4:]}"
         positions = await polymarket_client.get_positions_by_address(wallet)
+        activity = await polymarket_client.get_activity_by_address(
+            wallet, limit=20, start=since_24h
+        )
 
-        lines.append(f"👤 `{w_short}` — **{len(positions)}** position(s)")
+        n_pos = len(positions)
+        n_trades = len(activity)
+        total_positions += n_pos
+        total_trades_24h += n_trades
 
-        if not positions:
-            lines.append("   _Aucune position ouverte_\n")
+        lines.append(f"👤 `{w_short}` — **{n_pos}** pos / **{n_trades}** trades 24h")
+
+        if not positions and not activity:
+            lines.append("   _Aucune activité_\n")
             continue
 
-        total_positions += len(positions)
+        # ── Positions ouvertes ──
+        if positions:
+            positions.sort(key=lambda p: p.size, reverse=True)
 
-        # Trier par taille décroissante
-        positions.sort(key=lambda p: p.size, reverse=True)
+            trader_pnl = 0.0
+            for p in positions:
+                if p.avg_price > 0:
+                    trader_pnl += (p.current_price - p.avg_price) * p.size
+            pnl_emoji = "🟢" if trader_pnl >= 0 else "🔴"
+            lines.append(f"   {pnl_emoji} P&L positions : **{trader_pnl:+.2f} USDC**")
 
-        # P&L global du trader
-        trader_pnl = 0.0
-        for p in positions:
-            if p.avg_price > 0:
-                trader_pnl += (p.current_price - p.avg_price) * p.size
-        pnl_emoji = "🟢" if trader_pnl >= 0 else "🔴"
-        lines.append(f"   {pnl_emoji} P&L global : **{trader_pnl:+.2f} USDC**")
+            for p in positions[:5]:
+                pnl_e = "📈" if p.pnl_pct >= 0 else "📉"
+                outcome = p.outcome or "?"
+                val = p.size * p.current_price
+                lines.append(
+                    f"   {pnl_e} **{outcome}** @ {p.current_price:.2f} "
+                    f"({p.pnl_pct:+.1f}%) • {val:.1f}$"
+                )
+            if len(positions) > 5:
+                lines.append(f"   _… +{len(positions) - 5} autres positions_")
 
-        for p in positions[:8]:  # Max 8 positions par trader
-            pnl_e = "📈" if p.pnl_pct >= 0 else "📉"
-            outcome = p.outcome or "?"
-            # Tronquer l'ID de marché si pas de question lisible
-            market_label = p.market_id[:20] + "..." if len(p.market_id) > 20 else p.market_id
-            val = p.size * p.current_price
-            lines.append(
-                f"   {pnl_e} **{outcome}** @ {p.current_price:.2f} "
-                f"({p.pnl_pct:+.1f}%)"
-            )
-            lines.append(
-                f"      {p.size:.1f} shares • ~{val:.2f} USDC"
-            )
-        if len(positions) > 8:
-            lines.append(f"   _… +{len(positions) - 8} autres positions_")
+        # ── Trades récents (24h) ──
+        if activity:
+            lines.append("   ─ Trades 24h ─")
+            for a in activity[:5]:
+                side_e = "🟢" if a.side == "BUY" else "🔴"
+                title = a.title[:35] + "…" if len(a.title) > 35 else a.title
+                lines.append(
+                    f"   {side_e} {a.side} **{a.outcome}** • "
+                    f"{a.usdc_size:.1f}$ @ {a.price:.2f}"
+                )
+                if title:
+                    lines.append(f"      _{title}_")
+            if len(activity) > 5:
+                lines.append(f"   _… +{len(activity) - 5} autres trades_")
+
         lines.append("")
 
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(
-        f"📊 **Total : {total_positions} positions** "
+        f"📊 **{total_positions} positions** / "
+        f"**{total_trades_24h} trades 24h** "
         f"sur {len(followed)} trader(s)"
     )
     lines.append(

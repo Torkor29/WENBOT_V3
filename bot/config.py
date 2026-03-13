@@ -17,8 +17,9 @@ class Settings(BaseSettings):
     encryption_key: str = ""
 
     # Monitoring
-    # For aggressive copy-trading, you can go down to 1s
-    monitor_poll_interval: int = Field(default=15, ge=1, le=120)
+    # Default 2s for fast copy-trading. WebSocket handles instant detection;
+    # polling is the safety net. Set MONITOR_POLL_INTERVAL=1 for fastest.
+    monitor_poll_interval: int = Field(default=2, ge=1, le=120)
 
     # DB & Redis
     db_url: str = "sqlite+aiosqlite:///./polybot.db"

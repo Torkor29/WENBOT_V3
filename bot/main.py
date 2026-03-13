@@ -105,23 +105,47 @@ async def main() -> None:
 
     engine = CopyTradeEngine(telegram_bot=app.bot)
 
-    # Monitor Gamma (positions) — conservé comme source principale
+    # Monitor Data API (positions) — poll every N seconds
     monitor = MultiMasterMonitor(
         poll_interval=settings.monitor_poll_interval,
         on_signal=engine.handle_signal,
     )
 
-    # Callback WebSocket : sur chaque trade CLOB, on déclenche un check Gamma
-    # immédiat pour réduire la latence de détection des mouvements des masters.
+    # Callback WebSocket : sur chaque trade CLOB, on déclenche un check
+    # immédiat pour réduire la latence de détection à <1s.
 
     async def handle_ws_event(evt: RawWsEvent) -> None:
-        if evt.type == "last_trade_price":
+        if evt.type in ("last_trade_price", "trade"):
             await monitor.fast_check_all_wallets()
 
-    # Monitor WebSocket CLOB — fondation pour le temps réel
+    # Monitor WebSocket CLOB — temps réel
     clob_ws_monitor = ClobWsMonitor(on_event=handle_ws_event)
 
+    # Periodic job: sync WS subscriptions with tracked positions
+    async def sync_ws_subscriptions():
+        """Gather all token_ids from followed wallets' positions for WS."""
+        try:
+            from bot.services.polymarket import polymarket_client
+            token_ids: set[str] = set()
+            for wallet in monitor.watched_wallets:
+                positions = await polymarket_client.get_positions_by_address(wallet)
+                for p in positions:
+                    if p.token_id:
+                        token_ids.add(p.token_id)
+            if token_ids:
+                await clob_ws_monitor.update_subscriptions(token_ids)
+        except Exception as e:
+            logger.warning(f"WS subscription sync failed: {e}")
+
     scheduler = setup_scheduler(monitor)
+
+    # Sync WS subscriptions every 2 minutes
+    scheduler.add_job(
+        sync_ws_subscriptions,
+        "interval", seconds=120,
+        id="sync_ws_subs",
+    )
+
     scheduler.start()
     logger.info("Scheduler started.")
 
@@ -136,9 +160,10 @@ async def main() -> None:
         f"({len(monitor.watched_wallets)} wallet(s) watched)."
     )
 
-    # Démarrer le monitor WebSocket en parallèle (ne génère pour l'instant
-    # que des logs, sans impacter le moteur de copie).
+    # Start WebSocket + initial token subscription
     await clob_ws_monitor.start()
+    # Initial subscription sync (don't block startup)
+    asyncio.create_task(sync_ws_subscriptions())
 
     # Start web dashboard (FastAPI) if enabled
     dashboard_server = None
@@ -170,6 +195,9 @@ async def main() -> None:
         scheduler.shutdown(wait=False)
         await monitor.stop()
         await clob_ws_monitor.stop()
+        # Close persistent HTTP connections
+        from bot.services.polymarket import polymarket_client
+        await polymarket_client.close()
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
