@@ -362,7 +362,7 @@ class CopyTradeEngine:
                 # Finalize
                 elapsed = time.monotonic() - start_time
                 trade.execution_time_ms = int(elapsed * 1000)
-                trade.executed_at = datetime.now(timezone.utc)
+                trade.executed_at = datetime.utcnow()
                 user.daily_spent_usdc += fee_result.gross_amount
                 await session.commit()
 
@@ -382,12 +382,17 @@ class CopyTradeEngine:
                 f"❌ CRASH processing follower {tg_id}: {e}",
                 exc_info=True,
             )
-            # Try to notify user even on crash
+            # Try to notify user even on crash (user may be detached from session)
             try:
-                await self._notify_error(
-                    user, signal,
-                    f"Erreur inattendue lors du copytrade : {str(e)[:200]}"
-                )
+                if self._bot:
+                    from bot.handlers.notifications import format_trade_error
+                    text = format_trade_error(
+                        market_question=signal.market_question or signal.outcome,
+                        error_message=f"Erreur inattendue : {str(e)[:200]}",
+                    )
+                    await self._bot.send_message(
+                        chat_id=tg_id, text=text, parse_mode="Markdown",
+                    )
             except Exception:
                 pass
 
