@@ -114,6 +114,7 @@ async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         wallets = user.wallets or []
         primary_address = user.wallet_address or ""
+        has_encrypted_pk = user.encrypted_private_key is not None
 
     if primary_address:
         usdc_native, usdc_e = await polygon_client.get_usdc_balances(primary_address)
@@ -181,7 +182,7 @@ async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "🔀 Changer de wallet actif", callback_data="menu_switch_wallet"
             ),
         ])
-    if primary_address and user.encrypted_private_key:
+    if primary_address and has_encrypted_pk:
         keyboard.append([
             InlineKeyboardButton(
                 "🔑 Exporter la clé privée", callback_data="export_pk"
