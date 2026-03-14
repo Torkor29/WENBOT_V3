@@ -149,7 +149,7 @@ class CopyTradeEngine:
                     f"[{tg_id}] ✅ Checks passed — paper={user.paper_trading}, "
                     f"balance={balance:.2f} USDC, matic={matic_balance:.4f}, "
                     f"sizing_mode={user_settings.sizing_mode}, "
-                    f"fixed_amount={user_settings.fixed_amount_usdc}"
+                    f"fixed_amount={user_settings.fixed_amount}"
                 )
 
                 try:
