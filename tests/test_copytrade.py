@@ -60,7 +60,8 @@ class TestCopyTradeEngine:
         ):
             await engine.handle_signal(make_signal())
 
-    def test_passes_filters_blacklisted(self):
+    @pytest.mark.asyncio
+    async def test_passes_filters_blacklisted(self):
         """Blacklisted markets should be filtered out."""
         engine = CopyTradeEngine()
 
@@ -69,9 +70,10 @@ class TestCopyTradeEngine:
         settings_mock.blacklisted_markets = ["market-blocked"]
 
         signal = make_signal(market_id="market-blocked")
-        assert not engine._passes_filters(settings_mock, signal)
+        assert not await engine._passes_filters(settings_mock, signal)
 
-    def test_passes_filters_allowed(self):
+    @pytest.mark.asyncio
+    async def test_passes_filters_allowed(self):
         """Non-blacklisted markets should pass."""
         engine = CopyTradeEngine()
 
@@ -80,7 +82,7 @@ class TestCopyTradeEngine:
         settings_mock.blacklisted_markets = ["market-blocked"]
 
         signal = make_signal(market_id="market-ok")
-        assert engine._passes_filters(settings_mock, signal)
+        assert await engine._passes_filters(settings_mock, signal)
 
     def test_needs_confirmation_manual_on(self):
         """If manual confirmation is on, always needs confirmation."""

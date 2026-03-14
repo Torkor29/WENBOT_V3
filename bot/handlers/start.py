@@ -121,9 +121,9 @@ async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "→ Vous n'avez PAS besoin de MetaMask ou autre app.\n\n"
         "📩 **J'ai déjà un wallet Polygon** (utilisateurs avancés)\n"
         "→ Vous avez un wallet Polygon (MetaMask, etc.) avec des USDC dessus.\n"
-        "→ Vous fournissez l'adresse + la clé privée (chiffrée immédiatement).\n"
-        "→ Le bot utilise directement les USDC déjà présents.\n"
-        "→ Vous pouvez aussi bridger du SOL/ETH vers ce wallet.",
+        "→ Vous fournissez la clé privée (chiffrée immédiatement).\n"
+        "→ L'adresse est déduite automatiquement de la clé.\n"
+        "→ Le bot utilise directement les USDC déjà présents.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -162,7 +162,7 @@ async def onboard_menu_main(
 async def onboard_existing_wallet(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Ask user for an existing wallet address."""
+    """Ask user for their private key (address will be derived automatically)."""
     query = update.callback_query
     await query.answer()
 
@@ -170,13 +170,17 @@ async def onboard_existing_wallet(
         [InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")],
     ]
     await query.edit_message_text(
-        "📬 **Étape 1/2 — Adresse Wallet**\n\n"
-        "Envoyez votre adresse wallet **Polygon** (0x...).\n\n"
-        "⚠️ Cette adresse sera utilisée pour le trading sur Polymarket.",
+        "🔑 **Importer un wallet — Clé Privée**\n\n"
+        "Envoyez votre **clé privée** Polygon.\n\n"
+        "📬 L'adresse du wallet sera **déduite automatiquement** "
+        "de la clé — pas besoin de la fournir.\n\n"
+        "🔒 Votre message sera **immédiatement supprimé** et la clé "
+        "chiffrée en AES-256-GCM.\n\n"
+        "⚠️ Ne partagez JAMAIS votre clé privée ailleurs.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    return WALLET_ADDRESS
+    return PRIVATE_KEY
 
 
 async def onboard_create_wallet(
@@ -246,54 +250,10 @@ async def onboard_create_wallet(
     return ConversationHandler.END
 
 
-async def receive_wallet_address(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
-    """Receive and validate wallet address."""
-    address = update.message.text.strip()
-
-    cancel_kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")]]
-    )
-
-    # Basic validation
-    if not address.startswith("0x") or len(address) != 42:
-        await update.message.reply_text(
-            "❌ Adresse invalide. Elle doit commencer par `0x` "
-            "et faire 42 caractères.\n\nRéessayez :",
-            parse_mode="Markdown",
-            reply_markup=cancel_kb,
-        )
-        return WALLET_ADDRESS
-
-    # Check hex
-    try:
-        int(address, 16)
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Adresse invalide — caractères non-hexadécimaux détectés.\n\nRéessayez :",
-            reply_markup=cancel_kb,
-        )
-        return WALLET_ADDRESS
-
-    context.user_data["wallet_address"] = address
-
-    await update.message.reply_text(
-        "🔑 **Étape 2/2 — Clé Privée**\n\n"
-        "Envoyez votre clé privée Polygon.\n\n"
-        "🔒 Elle sera **immédiatement chiffrée** (AES-256-GCM) "
-        "et le message sera supprimé.\n\n"
-        "⚠️ Ne partagez JAMAIS votre clé privée ailleurs.",
-        parse_mode="Markdown",
-        reply_markup=cancel_kb,
-    )
-    return PRIVATE_KEY
-
-
 async def receive_private_key(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Receive private key — encrypt immediately, delete message."""
+    """Receive private key — derive address, encrypt immediately, delete message."""
     private_key = update.message.text.strip()
     chat = update.effective_chat
 
@@ -307,17 +267,35 @@ async def receive_private_key(
         [[InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")]]
     )
 
+    # Strip 0x prefix if present for consistency
+    pk_clean = private_key
+    if pk_clean.startswith("0x"):
+        pk_clean = pk_clean[2:]
+
     # Basic validation (use chat.send_message since original message may be deleted)
-    if len(private_key) < 32:
+    if len(pk_clean) < 32:
         await chat.send_message(
             "❌ Clé privée trop courte. Réessayez :",
             reply_markup=cancel_kb,
         )
         return PRIVATE_KEY
 
-    context.user_data["private_key"] = private_key
+    # Derive the wallet address from the private key
+    try:
+        from eth_account import Account
+        derived_address = Account.from_key(private_key).address
+    except Exception as e:
+        logger.warning(f"Invalid private key during onboarding: {e}")
+        await chat.send_message(
+            "❌ Clé privée invalide — impossible de dériver l'adresse.\n\n"
+            "Vérifiez que vous avez copié la bonne clé et réessayez :",
+            reply_markup=cancel_kb,
+        )
+        return PRIVATE_KEY
 
-    wallet = context.user_data["wallet_address"]
+    context.user_data["private_key"] = private_key
+    context.user_data["wallet_address"] = derived_address
+
     keyboard = [
         [
             InlineKeyboardButton("✅ Confirmer", callback_data="onboard_confirm"),
@@ -326,10 +304,12 @@ async def receive_private_key(
     ]
     await chat.send_message(
         "📋 **Résumé de l'inscription**\n\n"
-        f"📬 Wallet : `{wallet[:6]}...{wallet[-4:]}`\n"
+        f"📬 Wallet dérivé : `{derived_address}`\n"
         "🔑 Clé privée : ✅ Reçue (sera chiffrée AES-256)\n"
         "📝 Mode : Paper Trading (défaut)\n"
         "💸 Frais : 1% par trade copié\n\n"
+        "⚠️ **Vérifiez que l'adresse ci-dessus correspond bien "
+        "à votre wallet (MetaMask, etc.).**\n\n"
         "Confirmer l'inscription ?",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -440,10 +420,6 @@ def get_start_handler() -> ConversationHandler:
                     onboard_create_wallet, pattern="^onboard_create_wallet$"
                 ),
                 CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
-            ],
-            WALLET_ADDRESS: [
-                CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_wallet_address),
             ],
             PRIVATE_KEY: [
                 CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
