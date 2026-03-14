@@ -181,6 +181,12 @@ async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "🔀 Changer de wallet actif", callback_data="menu_switch_wallet"
             ),
         ])
+    if primary_address and user.encrypted_private_key:
+        keyboard.append([
+            InlineKeyboardButton(
+                "🔑 Exporter la clé privée", callback_data="export_pk"
+            ),
+        ])
     if wallets:
         keyboard.append([
             InlineKeyboardButton(
