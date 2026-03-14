@@ -252,31 +252,21 @@ async def withdraw_confirm(
 
     async with async_session() as session:
         user = await get_user_by_telegram_id(session, tg_user.id)
-        if not user or not user.wallet_address or not user.encrypted_private_key:
+        if not user or not user.encrypted_private_key:
             await query.edit_message_text("❌ Erreur — wallet introuvable.")
             return ConversationHandler.END
 
-        # Verify PK matches wallet address
+        # Decrypt PK once and derive the real signing address
         from eth_account import Account
         try:
-            pk_check = decrypt_private_key(
+            pk = decrypt_private_key(
                 user.encrypted_private_key,
                 settings.encryption_key,
                 user.uuid,
             )
-            derived_addr = Account.from_key(pk_check).address
-            del pk_check
-            if derived_addr.lower() != user.wallet_address.lower():
-                logger.warning(
-                    f"Withdraw PK mismatch auto-fix: wallet={user.wallet_address[:10]}... "
-                    f"→ pk_addr={derived_addr[:10]}..."
-                )
-                # Auto-fix: align wallet_address to match the PK
-                user.wallet_address = derived_addr
-                await session.commit()
-                logger.info(f"User {tg_user.id} wallet_address corrected to {derived_addr[:10]}...")
+            from_addr = Account.from_key(pk).address
         except Exception as e:
-            logger.error(f"PK verification failed: {e}")
+            logger.error(f"PK decryption failed for user {tg_user.id}: {e}")
             await query.edit_message_text(
                 f"❌ **Erreur de déchiffrement**\n\n"
                 f"Impossible de déchiffrer la clé privée : `{str(e)[:100]}`",
@@ -284,27 +274,30 @@ async def withdraw_confirm(
             )
             return ConversationHandler.END
 
-        # Check gas
-        matic = await polygon_client.get_matic_balance(user.wallet_address)
+        if from_addr.lower() != (user.wallet_address or "").lower():
+            logger.warning(
+                f"Withdraw PK mismatch (no auto-fix): "
+                f"db={user.wallet_address[:10]}... pk={from_addr[:10]}... "
+                f"— using PK address for tx"
+            )
+
+        # Check gas on the ACTUAL signing address
+        matic = await polygon_client.get_matic_balance(from_addr)
         if matic < 0.005:
             await query.edit_message_text(
                 "❌ **Gas insuffisant**\n\n"
                 f"Solde POL : {matic:.4f}\n"
+                f"Wallet : `{from_addr[:6]}...{from_addr[-4:]}`\n"
                 "Il faut au moins ~0.005 POL pour payer le gas du transfert.\n"
-                "Déposez un peu de POL/MATIC sur votre wallet Polygon.",
+                "Déposez un peu de POL/MATIC sur ce wallet.",
                 parse_mode="Markdown",
             )
+            del pk
             return ConversationHandler.END
-
-        pk = decrypt_private_key(
-            user.encrypted_private_key,
-            settings.encryption_key,
-            user.uuid,
-        )
 
         try:
             result = await polygon_client.transfer_usdc(
-                from_address=user.wallet_address,
+                from_address=from_addr,
                 to_address=dest,
                 amount_usdc=amount,
                 private_key=pk,

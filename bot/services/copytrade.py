@@ -128,28 +128,23 @@ class CopyTradeEngine:
                     user.uuid,
                 )
 
-                # Auto-fix PK/wallet mismatch (legacy wallets)
+                # Derive signing address from PK — never modify DB mid-flow
                 from eth_account import Account as _Acct
                 pk_addr = _Acct.from_key(pk).address
                 if pk_addr.lower() != (user.wallet_address or "").lower():
                     logger.warning(
-                        f"[{tg_id}] PK mismatch auto-fix: "
-                        f"{user.wallet_address[:10]}... → {pk_addr[:10]}..."
+                        f"[{tg_id}] PK/wallet mismatch (no auto-fix): "
+                        f"db={user.wallet_address[:10]}... pk={pk_addr[:10]}... "
+                        f"— using PK address for tx"
                     )
-                    user.wallet_address = pk_addr
-                    await session.commit()
 
                 # ── SPEED: fetch balances in parallel ──
                 if user.paper_trading:
                     onchain_balance = user_settings.allocated_capital
                     matic_balance = 1.0  # not needed for paper
                 else:
-                    usdc_task = polygon_client.get_usdc_balance(
-                        user.wallet_address or ""
-                    )
-                    matic_task = polygon_client.get_matic_balance(
-                        user.wallet_address or ""
-                    )
+                    usdc_task = polygon_client.get_usdc_balance(pk_addr)
+                    matic_task = polygon_client.get_matic_balance(pk_addr)
                     onchain_balance, matic_balance = await asyncio.gather(
                         usdc_task, matic_task
                     )
@@ -283,7 +278,7 @@ class CopyTradeEngine:
                     # Optional on-chain fee transfer (slower, can be toggled off for speed)
                     try:
                         transfer_result = await polygon_client.transfer_usdc(
-                            from_address=user.wallet_address,
+                            from_address=pk_addr,
                             to_address=settings.fees_wallet,
                             amount_usdc=fee_result.fee_amount,
                             private_key=pk,
