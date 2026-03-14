@@ -1339,6 +1339,91 @@ async def paper_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+# ── Export private key (ephemeral, auto-delete after 60s) ──────────
+
+async def export_pk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Export the user's private key in an auto-deleting message.
+
+    SECURITY:
+    - The PK is shown in a SEPARATE message (not edit) so it can be deleted
+    - Auto-deletes after 60 seconds
+    - Logs a warning for audit trail
+    """
+    import asyncio
+    from bot.services.crypto import decrypt_private_key
+    from bot.config import settings as app_settings
+
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = query.from_user
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user or not user.encrypted_private_key:
+            await query.edit_message_text(
+                "❌ Aucune clé privée enregistrée pour ce wallet."
+            )
+            return
+
+        try:
+            pk = decrypt_private_key(
+                user.encrypted_private_key,
+                app_settings.encryption_key,
+                user.uuid,
+            )
+        except Exception as e:
+            logger.error(f"Failed to decrypt PK for export (user {tg_user.id}): {e}")
+            await query.edit_message_text(
+                "❌ Erreur lors du déchiffrement. Contactez le support."
+            )
+            return
+
+    logger.warning(
+        f"⚠️ SECURITY: User {tg_user.id} exported private key "
+        f"for wallet {user.wallet_address}"
+    )
+
+    # Send PK in a separate message that will be auto-deleted
+    pk_msg = await query.message.reply_text(
+        "🔑 **CLÉE PRIVÉE — AUTO-SUPPRESSION DANS 60 SECONDES**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"`{pk}`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ **Copiez-la MAINTENANT** dans un gestionnaire de "
+        "mots de passe (Bitwarden, 1Password, etc.)\n\n"
+        "🚫 Ne la partagez **JAMAIS** — ni sur Discord, ni par "
+        "message, ni par email.\n\n"
+        "⏱️ Ce message sera **automatiquement supprimé** dans 60 secondes.",
+        parse_mode="Markdown",
+    )
+
+    # Update original message to remove the export button
+    keyboard = [
+        [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+    ]
+    await query.edit_message_text(
+        "✅ Clé privée envoyée ci-dessous.\n\n"
+        "⏱️ Le message sera auto-supprimé dans **60 secondes**.\n"
+        "Copiez-la dans un endroit sûr maintenant.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+    # Wipe PK from memory
+    del pk
+
+    # Auto-delete after 60 seconds
+    async def _auto_delete():
+        await asyncio.sleep(60)
+        try:
+            await pk_msg.delete()
+        except Exception:
+            pass  # Message may already be deleted by user
+
+    asyncio.create_task(_auto_delete())
+
+
 # ── Back to main menu ───────────────────────────────
 
 async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1381,5 +1466,6 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(paper_set_balance, pattern="^paper_set_balance$"),
         CallbackQueryHandler(paper_init_callback, pattern=r"^paper_init_\d+$"),
         CallbackQueryHandler(paper_reset, pattern="^paper_reset$"),
+        CallbackQueryHandler(export_pk, pattern="^export_pk$"),
         CallbackQueryHandler(menu_back, pattern="^menu_back$"),
     ]

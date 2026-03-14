@@ -186,7 +186,12 @@ async def onboard_existing_wallet(
 async def onboard_create_wallet(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
-    """Create a new Polygon wallet for the user and save it."""
+    """Create a new Polygon wallet for the user and save it.
+
+    SECURITY: The private key is NEVER displayed in the chat.
+    It is encrypted immediately and stored in DB. The user can
+    export it later via a dedicated button with auto-delete.
+    """
     from web3 import Web3
 
     query = update.callback_query
@@ -201,8 +206,6 @@ async def onboard_create_wallet(
     private_key = account.key.hex()
 
     async with async_session() as session:
-        # Si l'utilisateur existe déjà (créé lors de /start ou d'un essai précédent),
-        # on le réutilise pour éviter les doublons.
         existing = await get_user_by_telegram_id(session, tg_user.id)
         if existing:
             user = existing
@@ -218,24 +221,28 @@ async def onboard_create_wallet(
         user.wallet_auto_created = True
         await session.commit()
 
-    # Envoyer l'adresse + la clé une seule fois pour sauvegarde utilisateur
+    # SECURITY: wipe PK from memory immediately — never show in chat
+    del private_key
+
     keyboard = [
+        [InlineKeyboardButton(
+            "🔑 Exporter la clé privée (⚠️ sensible)",
+            callback_data="export_pk",
+        )],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
     await query.edit_message_text(
         "🎉 **Wallet Polygon dédié créé !**\n\n"
         f"📬 Adresse :\n`{wallet_address}`\n\n"
-        f"🔑 Clé privée :\n`{private_key}`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🔐 **SAUVEGARDEZ CETTE CLÉ MAINTENANT**\n\n"
-        "• Copiez-la dans un **gestionnaire de mots de passe** "
-        "(Bitwarden, 1Password, etc.) ou une **note chiffrée**.\n"
-        "• **Ce message ne sera plus jamais affiché.**\n"
-        "• Sans cette clé, vous ne pourrez pas récupérer "
-        "vos fonds en dehors du bot.\n\n"
-        "🔒 **Sécurité :** La clé est stockée **chiffrée (AES-256-GCM)** "
-        "sur nos serveurs pour signer vos trades automatiquement. "
-        "Elle n'est jamais visible en clair après cet écran.\n"
+        "🔒 **Clé privée : chiffrée et sauvegardée (AES-256-GCM)** ✅\n\n"
+        "Pour des raisons de **sécurité**, la clé privée n'est "
+        "**pas affichée ici**. Telegram n'est pas chiffré de bout "
+        "en bout — un message contenant votre clé pourrait être "
+        "intercepté.\n\n"
+        "Si vous souhaitez sauvegarder votre clé privée, utilisez "
+        "le bouton ci-dessous. Le message s'auto-supprimera après "
+        "**60 secondes**.\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "**Prochaines étapes :**\n"
         "1. « 💳 Déposer » — Alimenter le wallet en USDC\n"
@@ -243,9 +250,6 @@ async def onboard_create_wallet(
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-
-    # Nettoyer la clé en mémoire
-    del private_key
 
     return ConversationHandler.END
 
