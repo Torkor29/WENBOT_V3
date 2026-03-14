@@ -176,6 +176,12 @@ async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "🔀 Changer de wallet actif", callback_data="menu_switch_wallet"
             ),
         ])
+    if has_multiple_wallets:
+        keyboard.append([
+            InlineKeyboardButton(
+                "🗑️ Supprimer un wallet", callback_data="menu_delete_wallet"
+            ),
+        ])
     keyboard.extend([
         [
             InlineKeyboardButton(
@@ -526,6 +532,164 @@ async def switch_wallet_callback(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
+# ── Delete wallet ─────────────────────────────────
+
+async def menu_delete_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Affiche la liste des wallets non-actifs pour suppression."""
+    query = update.callback_query
+    await query.answer()
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+
+        wallets = [w for w in (user.wallets or []) if w.chain == "polygon"]
+        primary = user.wallet_address or ""
+
+    # Only show non-primary wallets for deletion
+    deletable = [w for w in wallets if w.address.lower() != primary.lower()]
+
+    if not deletable:
+        await query.edit_message_text(
+            "ℹ️ Vous n'avez aucun wallet supprimable.\n"
+            "Le wallet actif ne peut pas être supprimé.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Retour", callback_data="menu_balance")]]
+            ),
+        )
+        return
+
+    lines = ["🗑️ **SUPPRIMER UN WALLET**\n━━━━━━━━━━━━━━━━━━━━\n"]
+    lines.append("⚠️ Le wallet actif ne peut pas être supprimé.\n")
+    keyboard = []
+    for w in deletable:
+        short = f"{w.address[:6]}...{w.address[-4:]}"
+        created = " (créé)" if w.auto_created else " (importé)"
+        lines.append(f"• `{short}`{created}")
+        keyboard.append([
+            InlineKeyboardButton(
+                f"🗑️ Supprimer {short}",
+                callback_data=f"delwallet_confirm_{w.id}",
+            )
+        ])
+
+    keyboard.append(
+        [InlineKeyboardButton("⬅️ Retour", callback_data="menu_balance")]
+    )
+
+    await query.edit_message_text(
+        "\n".join(lines) + "\n\nSélectionnez le wallet à supprimer :",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def delete_wallet_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Demande confirmation avant suppression."""
+    query = update.callback_query
+    await query.answer()
+
+    wallet_id = int(query.data.replace("delwallet_confirm_", ""))
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+
+        target = None
+        for w in (user.wallets or []):
+            if w.id == wallet_id and w.chain == "polygon":
+                target = w
+                break
+
+        if not target:
+            await query.edit_message_text(
+                "❌ Wallet introuvable.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅️ Retour", callback_data="menu_balance")]]
+                ),
+            )
+            return
+
+        # Block deletion of active wallet
+        if target.address.lower() == (user.wallet_address or "").lower():
+            await query.edit_message_text(
+                "❌ Impossible de supprimer le wallet actif.\n"
+                "Changez de wallet actif d'abord.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅️ Retour", callback_data="menu_balance")]]
+                ),
+            )
+            return
+
+        short = f"{target.address[:6]}...{target.address[-4:]}"
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "✅ Oui, supprimer", callback_data=f"delwallet_exec_{wallet_id}"
+            ),
+            InlineKeyboardButton("❌ Annuler", callback_data="menu_balance"),
+        ]
+    ]
+    await query.edit_message_text(
+        f"⚠️ **Confirmer la suppression ?**\n\n"
+        f"Wallet : `{short}`\n\n"
+        "Cette action est irréversible. La clé privée chiffrée "
+        "sera supprimée de nos serveurs.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def delete_wallet_exec(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Supprime définitivement un wallet non-actif."""
+    query = update.callback_query
+    await query.answer()
+
+    wallet_id = int(query.data.replace("delwallet_exec_", ""))
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+
+        target = None
+        for w in (user.wallets or []):
+            if w.id == wallet_id and w.chain == "polygon":
+                target = w
+                break
+
+        if not target:
+            await query.edit_message_text("❌ Wallet introuvable.")
+            return
+
+        # Final safety check
+        if target.address.lower() == (user.wallet_address or "").lower():
+            await query.edit_message_text("❌ Impossible de supprimer le wallet actif.")
+            return
+
+        short = f"{target.address[:6]}...{target.address[-4:]}"
+        await session.delete(target)
+        await session.commit()
+
+        logger.info(
+            f"User {user.telegram_id} deleted wallet "
+            f"{target.address[:10]}... (UserWallet #{wallet_id})"
+        )
+
+    await query.edit_message_text(
+        f"✅ Wallet `{short}` supprimé.\n\n"
+        "La clé privée chiffrée a été effacée de nos serveurs.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👛 Wallets", callback_data="menu_balance")],
+            [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+        ]),
+    )
+
+
 # ── Dashboard : positions RÉELLES des traders suivis ───
 
 async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -847,5 +1011,8 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(menu_recap, pattern="^menu_recap$"),
         CallbackQueryHandler(menu_switch_wallet, pattern="^menu_switch_wallet$"),
         CallbackQueryHandler(switch_wallet_callback, pattern=r"^switch_wallet_\d+$"),
+        CallbackQueryHandler(menu_delete_wallet, pattern="^menu_delete_wallet$"),
+        CallbackQueryHandler(delete_wallet_confirm, pattern=r"^delwallet_confirm_\d+$"),
+        CallbackQueryHandler(delete_wallet_exec, pattern=r"^delwallet_exec_\d+$"),
         CallbackQueryHandler(menu_back, pattern="^menu_back$"),
     ]
