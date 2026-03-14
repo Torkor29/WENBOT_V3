@@ -113,6 +113,17 @@ class CopyTradeEngine:
 
                 user_settings = await get_or_create_settings(session, user)
 
+                # ── SAFETY: force paper mode if user never explicitly enabled live ──
+                # This prevents accidental live trading when paper_trading column
+                # defaulted to False in DB (before migration fix)
+                if not user.paper_trading and not user.polymarket_approved:
+                    logger.warning(
+                        f"[{tg_id}] ⚠️ SAFETY: paper_trading=False but "
+                        f"polymarket_approved=False — forcing paper mode"
+                    )
+                    user.paper_trading = True
+                    await session.commit()
+
                 if not await self._passes_filters(user_settings, signal):
                     logger.info(f"User {tg_id}: signal filtered out by settings")
                     return

@@ -41,6 +41,7 @@ async def init_db() -> None:
             "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS take_profit_enabled BOOLEAN DEFAULT false",
             "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS take_profit_pct FLOAT DEFAULT 50.0",
             # Paper trading columns
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS paper_trading BOOLEAN DEFAULT true",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS paper_balance FLOAT DEFAULT 1000.0",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS paper_initial_balance FLOAT DEFAULT 1000.0",
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS is_paper BOOLEAN DEFAULT false",
