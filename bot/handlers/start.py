@@ -15,6 +15,7 @@ from telegram.ext import (
 from bot.config import settings
 from bot.db.session import async_session
 from bot.services.user_service import get_user_by_telegram_id, create_user, save_wallet
+from bot.utils.banner import send_with_banner
 
 logger = logging.getLogger(__name__)
 
@@ -46,19 +47,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "configurer votre wallet et choisir vos traders à copier."
     )
 
-    if settings.welcome_banner_url:
-        await update.message.reply_photo(
-            photo=settings.welcome_banner_url,
-            caption=welcome_text,
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-    else:
-        await update.message.reply_text(
-            welcome_text,
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+    await send_with_banner(
+        update.message,
+        welcome_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
     return WELCOME
 

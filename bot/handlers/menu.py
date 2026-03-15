@@ -10,6 +10,7 @@ from bot.config import settings
 from bot.db.session import async_session
 from bot.services.user_service import get_user_by_telegram_id, get_or_create_settings
 from bot.services.web3_client import polygon_client
+from bot.utils.banner import send_with_banner
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +97,8 @@ async def _send_main_menu(message, tg_user, text_override: str | None = None) ->
 
     header = text_override or text
 
-    await message.reply_text(
-        header, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    await send_with_banner(
+        message, header, reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
