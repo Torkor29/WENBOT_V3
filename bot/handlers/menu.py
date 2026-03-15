@@ -1085,6 +1085,12 @@ async def _menu_recap_impl(query) -> None:
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=today_start.weekday())
 
+        def _aware(dt):
+            """Ensure datetime is timezone-aware (UTC)."""
+            if dt is None:
+                return None
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
         # Filter by current mode (paper or live)
         is_paper = user.paper_trading
         all_trades = (await session.execute(
@@ -1096,6 +1102,9 @@ async def _menu_recap_impl(query) -> None:
         )).scalars().all()
         # Filter out trades with no created_at to prevent comparisons with None
         all_trades = [t for t in all_trades if t.created_at is not None]
+        # Make all timestamps timezone-aware
+        for t in all_trades:
+            t.created_at = _aware(t.created_at)
 
     if not followed:
         await query.edit_message_text(

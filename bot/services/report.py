@@ -356,6 +356,15 @@ async def build_report_data(
     from bot.models.trade import TradeSide
 
     now = datetime.now(timezone.utc)
+
+    # Ensure all trade timestamps are timezone-aware for comparison
+    def _aware(dt):
+        """Convert naive datetime to UTC-aware."""
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
     wallet_short = (
         f"{user.wallet_address[:6]}...{user.wallet_address[-4:]}"
         if user.wallet_address else "N/A"
@@ -402,7 +411,7 @@ async def build_report_data(
     tf_stats = []
     for label, delta in timeframes:
         cutoff = now - delta
-        tf_trades = [t for t in trades if t.created_at and t.created_at >= cutoff]
+        tf_trades = [t for t in trades if t.created_at and _aware(t.created_at) >= cutoff]
 
         buys = [t for t in tf_trades if t.side == TradeSide.BUY]
         sells = [t for t in tf_trades if t.side == TradeSide.SELL]
