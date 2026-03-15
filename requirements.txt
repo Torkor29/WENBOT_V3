@@ -31,6 +31,9 @@ cryptography==44.0.0
 # Scheduling
 apscheduler==3.10.4
 
+# PDF report generation
+reportlab==4.1.0
+
 # Utils
 python-dotenv==1.0.1
 pydantic==2.10.4
