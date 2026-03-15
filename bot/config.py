@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     monitor_poll_interval: int = Field(default=2, ge=1, le=120)
 
     # DB & Redis
+    postgres_password: str = ""  # used by docker-compose for PostgreSQL container
     db_url: str = "sqlite+aiosqlite:///./polybot.db"
     redis_url: str = "redis://redis:6379"
 
