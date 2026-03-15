@@ -551,19 +551,64 @@ class PolymarketClient:
             return None
 
     async def get_price(self, token_id: str, side: str = "BUY") -> float:
-        """Get the current best price for a token via the order book."""
+        """Get the current best price for a token.
+
+        Tries multiple sources in order:
+        1. CLOB /midpoint (best bid/ask midpoint)
+        2. CLOB /price (best price for BUY side)
+        3. CLOB /book (extract best bid from order book)
+        """
+        http = await self._get_http()
+
+        # 1) Try midpoint
         try:
-            http = await self._get_http()
             resp = await http.get(
                 f"{CLOB_HOST}/midpoint",
                 params={"token_id": token_id},
             )
             resp.raise_for_status()
-            data = resp.json()
-            return float(data.get("mid", 0))
-        except Exception as e:
-            logger.error(f"Failed to get price for {token_id}: {e}")
-            return 0.0
+            mid = float(resp.json().get("mid", 0))
+            if mid > 0:
+                return mid
+        except Exception:
+            pass
+
+        # 2) Try /price endpoint
+        try:
+            resp = await http.get(
+                f"{CLOB_HOST}/price",
+                params={"token_id": token_id, "side": "buy"},
+            )
+            resp.raise_for_status()
+            price = float(resp.json().get("price", 0))
+            if price > 0:
+                return price
+        except Exception:
+            pass
+
+        # 3) Try order book — extract best bid
+        try:
+            resp = await http.get(
+                f"{CLOB_HOST}/book",
+                params={"token_id": token_id},
+            )
+            resp.raise_for_status()
+            book = resp.json()
+            bids = book.get("bids", [])
+            asks = book.get("asks", [])
+            if bids:
+                best_bid = float(bids[0].get("price", 0))
+                if best_bid > 0:
+                    return best_bid
+            if asks:
+                best_ask = float(asks[0].get("price", 0))
+                if best_ask > 0:
+                    return best_ask
+        except Exception:
+            pass
+
+        logger.warning(f"No price available for token {token_id[:16]}...")
+        return 0.0
 
 
 # Singleton

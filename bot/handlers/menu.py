@@ -368,7 +368,8 @@ async def menu_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             pnl_emoji = "📈" if pnl_usdc >= 0 else "📉"
             pnl_str = f"{pnl_emoji} {pnl_sign}{pnl_usdc:.2f} USDC ({pnl_sign}{pnl_pct:.1f}%)"
         else:
-            pnl_str = "⏳ Prix indisponible"
+            # Market expired/no liquidity — show entry price as reference
+            pnl_str = f"⏳ Marché expiré (entry: {entry_price:.2f})"
 
         lines.append(
             f"{'🟢' if t.side.value == 'buy' else '🔴'} **{q}**{paper}\n"
