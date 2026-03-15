@@ -1,4 +1,4 @@
-## WENPOLYMARKET — Polymarket CopyTrading Bot
+## WENBOT_COPY — Polymarket CopyTrading Bot
 
 Bot Telegram de copy-trading pour Polymarket, orienté wallets (multi-masters) et rapidité d'exécution.
 
@@ -40,8 +40,8 @@ L’architecture est pensée pour faire évoluer le projet vers du **sniping / a
 1. **Cloner le repo**
 
 ```bash
-git clone https://github.com/Torkor29/WENPOLYMARKET.git
-cd WENPOLYMARKET
+git clone https://github.com/Torkor29/WENBOT_COPY.git
+cd WENBOT_COPY
 ```
 
 2. **Copier et remplir `.env`**
