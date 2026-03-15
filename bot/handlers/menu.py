@@ -1031,7 +1031,10 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_dashboard"),
             InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
         ],
-        [InlineKeyboardButton("📄 Rapport PDF", callback_data="paper_report")],
+        [
+            InlineKeyboardButton("📄 Rapport PDF", callback_data="paper_report"),
+            InlineKeyboardButton("📊 Rapport Trader", callback_data="trader_report"),
+        ],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
     ]
     await query.edit_message_text(
@@ -1223,7 +1226,10 @@ async def _menu_recap_impl(query) -> None:
             InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
             InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_recap"),
         ],
-        [InlineKeyboardButton("📄 Rapport PDF", callback_data="paper_report")],
+        [
+            InlineKeyboardButton("📄 Rapport PDF", callback_data="paper_report"),
+            InlineKeyboardButton("📊 Rapport Trader", callback_data="trader_report"),
+        ],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
     ]
     await query.edit_message_text(
@@ -1830,6 +1836,195 @@ async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+# ── Trader Report (wallet tracker) ─────────────────────
+
+async def trader_report_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show list of followed wallets to pick one for a detailed report."""
+    query = update.callback_query
+    await query.answer()
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        followed = us.followed_wallets or []
+
+    if not followed:
+        await query.edit_message_text(
+            "❌ Aucun trader suivi.\n\nAjoutez un wallet dans ⚙️ Paramètres.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+            ]),
+        )
+        return
+
+    keyboard = []
+    for w in followed:
+        short = f"{w[:6]}...{w[-4:]}"
+        keyboard.append([
+            InlineKeyboardButton(f"📊 {short}", callback_data=f"trader_rpt_{w}"),
+        ])
+    keyboard.append([InlineKeyboardButton("🏠 Menu", callback_data="menu_back")])
+
+    await query.edit_message_text(
+        "📊 **RAPPORT TRADER**\n━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Choisissez le wallet du trader à analyser :",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def trader_report_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a performance report for a followed trader's wallet."""
+    query = update.callback_query
+    wallet = query.data.replace("trader_rpt_", "")
+    await query.answer("⏳ Analyse du wallet en cours…")
+
+    try:
+        from bot.services.polymarket import polymarket_client
+        from datetime import datetime, timezone, timedelta
+        import asyncio
+
+        w_short = f"{wallet[:6]}...{wallet[-4:]}"
+
+        # Fetch positions and activity in parallel
+        positions_task = polymarket_client.get_positions_by_address(wallet)
+
+        now = datetime.now(timezone.utc)
+        # Fetch activity for last 24h (max coverage)
+        ts_24h = int((now - timedelta(hours=24)).timestamp())
+        activity_task = polymarket_client.get_activity_by_address(
+            wallet, limit=500, start=ts_24h
+        )
+
+        positions, activities = await asyncio.gather(
+            positions_task, activity_task, return_exceptions=True
+        )
+
+        if isinstance(positions, Exception):
+            positions = []
+        if isinstance(activities, Exception):
+            activities = []
+
+        # ── Calculate stats per timeframe ──
+        timeframes = [
+            ("1h", timedelta(hours=1)),
+            ("3h", timedelta(hours=3)),
+            ("5h", timedelta(hours=5)),
+            ("24h", timedelta(hours=24)),
+        ]
+
+        now_ts = int(now.timestamp())
+        tf_lines = []
+        for label, delta in timeframes:
+            cutoff_ts = int((now - delta).timestamp())
+            tf_acts = [a for a in activities if a.timestamp >= cutoff_ts]
+            buys = [a for a in tf_acts if a.side.upper() == "BUY"]
+            sells = [a for a in tf_acts if a.side.upper() == "SELL"]
+            volume = sum(a.usdc_size for a in tf_acts)
+            trades_count = len(tf_acts)
+
+            tf_lines.append(
+                f"**{label}** : {trades_count} trades "
+                f"({len(buys)}B/{len(sells)}S) • "
+                f"Vol: {volume:.0f} USDC"
+            )
+
+        # ── Current positions summary ──
+        total_invested = 0.0
+        total_current = 0.0
+        pos_lines = []
+
+        # Sort by value (biggest first)
+        positions.sort(key=lambda p: p.size * p.current_price, reverse=True)
+
+        for p in positions[:20]:  # Top 20 positions
+            invested = p.size * p.avg_price
+            current_val = p.size * p.current_price
+            pnl = current_val - invested
+            total_invested += invested
+            total_current += current_val
+
+            pnl_emoji = "📈" if pnl >= 0 else "📉"
+            title = p.title[:35] + "…" if len(p.title) > 35 else p.title
+
+            pos_lines.append(
+                f"{'🟢' if p.outcome.lower() == 'yes' else '🔴'} **{title}**\n"
+                f"   {p.outcome} @ {p.avg_price:.2f} → {p.current_price:.2f} "
+                f"| {p.size:.1f} shares\n"
+                f"   {pnl_emoji} {pnl:+.2f} USDC ({p.pnl_pct:+.1f}%)"
+            )
+
+        total_pnl = total_current - total_invested
+        total_pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
+
+        # ── Build message ──
+        text = (
+            f"📊 **RAPPORT TRADER**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 Wallet : `{w_short}`\n"
+            f"📅 {now.strftime('%d/%m/%Y %H:%M')} UTC\n\n"
+            f"**📈 ACTIVITÉ DE TRADING**\n"
+        )
+        text += "\n".join(tf_lines)
+        text += (
+            f"\n\n**💼 POSITIONS OUVERTES** ({len(positions)} total"
+            f"{', top 20 affichées' if len(positions) > 20 else ''})\n"
+        )
+
+        if pos_lines:
+            text += "\n" + "\n\n".join(pos_lines[:10])  # Show top 10 in msg
+            if len(positions) > 10:
+                remaining_pnl = sum(
+                    (p.size * p.current_price) - (p.size * p.avg_price)
+                    for p in positions[10:]
+                )
+                text += f"\n\n_... +{len(positions) - 10} autres positions ({remaining_pnl:+.2f} USDC)_"
+        else:
+            text += "\n_Aucune position ouverte._"
+
+        text += (
+            f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 **Total investi** : {total_invested:.2f} USDC\n"
+            f"💵 **Valeur actuelle** : {total_current:.2f} USDC\n"
+            f"{'📈' if total_pnl >= 0 else '📉'} **PNL** : {total_pnl:+.2f} USDC "
+            f"({total_pnl_pct:+.1f}%)\n"
+        )
+
+        # Truncate if too long for Telegram (4096 char limit)
+        if len(text) > 4000:
+            text = text[:3950] + "\n\n_... message tronqué_"
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 Rafraîchir", callback_data=f"trader_rpt_{wallet}")],
+            [
+                InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
+                InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
+            ],
+            [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+        ]
+
+        await query.edit_message_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    except Exception as e:
+        logger.error(f"trader_report error: {e}", exc_info=True)
+        try:
+            await query.edit_message_text(
+                f"❌ **Erreur rapport trader**\n\n`{str(e)[:300]}`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+                ]),
+            )
+        except Exception:
+            pass
+
+
 def get_menu_handlers() -> list:
     return [
         CallbackQueryHandler(menu_balance, pattern="^menu_balance$"),
@@ -1850,6 +2045,8 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(delete_wallet_exec, pattern=r"^delwallet_exec_\d+$"),
         CallbackQueryHandler(menu_paper, pattern="^menu_paper$"),
         CallbackQueryHandler(paper_report, pattern="^paper_report$"),
+        CallbackQueryHandler(trader_report_select, pattern="^trader_report$"),
+        CallbackQueryHandler(trader_report_generate, pattern=r"^trader_rpt_0x[a-fA-F0-9]+$"),
         CallbackQueryHandler(paper_set_balance, pattern="^paper_set_balance$"),
         CallbackQueryHandler(paper_init_callback, pattern=r"^paper_init_\d+$"),
         CallbackQueryHandler(paper_reset, pattern="^paper_reset$"),
