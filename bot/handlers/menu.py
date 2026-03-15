@@ -33,12 +33,21 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
     us = user.settings
     traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
 
+    # Paper wallet quick summary
+    paper_line = ""
+    if user.paper_trading:
+        paper_line = (
+            f"💰 Paper : **{user.paper_balance:.2f}** / "
+            f"{user.paper_initial_balance:.2f} USDC\n"
+        )
+
     text = (
         f"**WENPOLYMARKET** — Copy-Trading Polymarket\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Bonjour **{tg_user.first_name}** !\n\n"
         f"📬 Wallet : {wallet_short}\n"
         f"🎛️ {status} • {mode}\n"
+        f"{paper_line}"
         f"👥 {traders_count} trader(s) suivi(s)\n"
     )
 
@@ -74,6 +83,12 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
             InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
         ],
     ])
+
+    # Stop Copy button — only if copytrading is active (not paused)
+    if user.is_active and not user.is_paused:
+        keyboard.append([
+            InlineKeyboardButton("🛑 Stop Copy", callback_data="stop_copy"),
+        ])
 
     if user.paper_trading:
         keyboard.insert(-1, [
@@ -1011,6 +1026,7 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_dashboard"),
             InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
         ],
+        [InlineKeyboardButton("📄 Rapport PDF", callback_data="paper_report")],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
     ]
     await query.edit_message_text(
@@ -1167,6 +1183,7 @@ async def menu_recap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
             InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_recap"),
         ],
+        [InlineKeyboardButton("📄 Rapport PDF", callback_data="paper_report")],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
     ]
     await query.edit_message_text(
@@ -1177,11 +1194,13 @@ async def menu_recap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # ── Paper Wallet ─────────────────────────────────────
 
 async def menu_paper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Paper trading wallet overview — balance, PNL, open/settled positions."""
+    """Paper trading wallet overview — balance, unrealized PNL, settled results."""
     query = update.callback_query
-    await query.answer()
+    await query.answer("⏳ Calcul du portefeuille…")
 
     from bot.models.trade import Trade, TradeStatus, TradeSide
+    from bot.services.polymarket import polymarket_client
+    import asyncio
 
     async with async_session() as session:
         user = await get_user_by_telegram_id(session, query.from_user.id)
@@ -1212,20 +1231,98 @@ async def menu_paper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         paper_balance = user.paper_balance
         paper_initial = user.paper_initial_balance
 
-    # Overall PNL
-    total_pnl = paper_balance - paper_initial
+    # ── Fetch current prices for open positions (unrealized PNL) ──
+    current_prices: dict[str, float] = {}
+    if open_trades:
+        unique_tokens = {t.token_id for t in open_trades}
+
+        async def _fetch_price(token_id: str) -> tuple[str, float]:
+            try:
+                price = await polymarket_client.get_price(token_id)
+                return token_id, price
+            except Exception:
+                return token_id, 0.0
+
+        price_results = await asyncio.gather(
+            *[_fetch_price(tid) for tid in unique_tokens],
+            return_exceptions=True,
+        )
+        for res in price_results:
+            if isinstance(res, tuple):
+                current_prices[res[0]] = res[1]
+
+    # ── Calculate unrealized PNL ──
+    total_invested = 0.0
+    total_current_value = 0.0
+    for t in open_trades:
+        invested = t.net_amount_usdc
+        shares = t.shares or (invested / t.price if t.price > 0 else 0)
+        cur_price = current_prices.get(t.token_id, 0)
+        current_value = shares * cur_price if cur_price > 0 else invested
+        total_invested += invested
+        total_current_value += current_value
+
+    unrealized_pnl = total_current_value - total_invested
+    unrealized_pct = (unrealized_pnl / total_invested * 100) if total_invested > 0 else 0
+
+    # ── Portfolio total = cash + positions value ──
+    portfolio_value = paper_balance + total_current_value
+    total_pnl = portfolio_value - paper_initial
     pnl_pct = (total_pnl / paper_initial * 100) if paper_initial > 0 else 0
     pnl_sign = "+" if total_pnl >= 0 else ""
     pnl_emoji = "📈" if total_pnl >= 0 else "📉"
 
     lines = [
         "📝 **PAPER WALLET**\n━━━━━━━━━━━━━━━━━━━━\n",
-        f"💰 **Solde actuel** : {paper_balance:.2f} USDC",
-        f"🏁 **Solde initial** : {paper_initial:.2f} USDC",
-        f"{pnl_emoji} **PNL total** : {pnl_sign}{total_pnl:.2f} USDC ({pnl_sign}{pnl_pct:.1f}%)\n",
+        f"🏁 Capital initial : **{paper_initial:.2f} USDC**\n",
+        f"💵 Cash disponible : **{paper_balance:.2f} USDC**",
+        f"📊 Positions ouvertes : **{total_current_value:.2f} USDC**"
+        f" ({len(open_trades)} pos.)",
+        f"━━━━━━━━━━━━━━━━━━━━",
+        f"💼 **Portefeuille total : {portfolio_value:.2f} USDC**",
+        f"{pnl_emoji} **PNL total : {pnl_sign}{total_pnl:.2f} USDC "
+        f"({pnl_sign}{pnl_pct:.1f}%)**\n",
     ]
 
-    # Settled positions summary
+    # ── Open positions with unrealized PNL ──
+    if open_trades:
+        ur_sign = "+" if unrealized_pnl >= 0 else ""
+        ur_emoji = "📈" if unrealized_pnl >= 0 else "📉"
+        lines.append(
+            f"📌 **Positions ouvertes** ({len(open_trades)}) — "
+            f"{ur_emoji} {ur_sign}{unrealized_pnl:.2f} USDC "
+            f"({ur_sign}{unrealized_pct:.1f}%)"
+        )
+        for t in open_trades[:10]:
+            q = t.market_question or t.market_id
+            if len(q) > 35:
+                q = q[:32] + "..."
+            shares = t.shares or 0
+            invested = t.net_amount_usdc
+            entry_price = t.price
+            cur_price = current_prices.get(t.token_id, 0)
+            current_val = shares * cur_price if cur_price > 0 else 0
+            pos_pnl = current_val - invested
+            pos_pct = (pos_pnl / invested * 100) if invested > 0 else 0
+
+            time_str = t.created_at.strftime("%d/%m %H:%M") if t.created_at else "?"
+
+            if cur_price > 0:
+                p_sign = "+" if pos_pnl >= 0 else ""
+                p_emoji = "📈" if pos_pnl >= 0 else "📉"
+                pnl_str = f"{p_emoji} {p_sign}{pos_pnl:.2f} ({p_sign}{pos_pct:.0f}%)"
+            else:
+                pnl_str = "⏳ prix indispo."
+
+            lines.append(
+                f"\n   🟢 **{q}**\n"
+                f"   {time_str} | {invested:.2f}→{current_val:.2f} USDC | {pnl_str}\n"
+                f"   Entry: {entry_price:.2f} → Now: {cur_price:.2f} | {shares:.1f} shares"
+            )
+    else:
+        lines.append("\n📌 _Aucune position ouverte._")
+
+    # ── Settled positions summary ──
     if settled_trades:
         wins = sum(1 for t in settled_trades if (t.settlement_pnl or 0) > 0)
         losses = sum(1 for t in settled_trades if (t.settlement_pnl or 0) <= 0)
@@ -1233,48 +1330,23 @@ async def menu_paper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         wr = (wins / len(settled_trades) * 100) if settled_trades else 0
 
         lines.append(
-            f"📊 **Résultats** : {wins}W / {losses}L "
-            f"(WR {wr:.0f}%) • PNL {total_settled_pnl:+.2f} USDC"
+            f"\n🏁 **Trades résolus** : {wins}W / {losses}L "
+            f"(WR {wr:.0f}%) • PNL réalisé {total_settled_pnl:+.2f} USDC"
         )
-
-        lines.append("\n🏁 **Derniers paris résolus :**")
-        for t in settled_trades[:8]:
+        for t in settled_trades[:5]:
             q = t.market_question or t.market_id
             if len(q) > 35:
                 q = q[:32] + "..."
             pnl = t.settlement_pnl or 0
             emoji = "✅" if pnl > 0 else "❌"
             lines.append(
-                f"   {emoji} {pnl:+.2f} USDC | {t.net_amount_usdc:.2f} misé\n"
-                f"      _{q}_"
+                f"   {emoji} {pnl:+.2f} USDC | {t.net_amount_usdc:.2f} misé — _{q}_"
             )
-    else:
-        lines.append("📊 _Aucun pari résolu pour le moment._")
-
-    # Open positions
-    if open_trades:
-        lines.append(f"\n📌 **Positions ouvertes** ({len(open_trades)}) :")
-        total_open_invested = 0.0
-        for t in open_trades[:8]:
-            q = t.market_question or t.market_id
-            if len(q) > 35:
-                q = q[:32] + "..."
-            shares = t.shares or 0
-            invested = t.net_amount_usdc
-            total_open_invested += invested
-            time_str = t.created_at.strftime("%d/%m %H:%M") if t.created_at else "?"
-            lines.append(
-                f"   🟢 {time_str} | {invested:.2f} USDC | {shares:.1f} shares\n"
-                f"      _{q}_"
-            )
-        lines.append(f"\n   💼 Total investi (ouvert) : {total_open_invested:.2f} USDC")
-    else:
-        lines.append("\n📌 _Aucune position ouverte._")
 
     lines.append(
         "\n━━━━━━━━━━━━━━━━━━━━\n"
-        "💡 Les paris se règlent automatiquement\n"
-        "quand le marché est résolu sur Polymarket."
+        "💡 Prix mis à jour en temps réel depuis Polymarket.\n"
+        "Les paris se règlent quand le marché est résolu."
     )
 
     text = "\n".join(lines)
@@ -1284,15 +1356,93 @@ async def menu_paper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     keyboard = [
         [
             InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_paper"),
-            InlineKeyboardButton("💰 Changer solde", callback_data="paper_set_balance"),
+            InlineKeyboardButton("📄 Rapport PDF", callback_data="paper_report"),
         ],
         [
+            InlineKeyboardButton("💰 Changer solde", callback_data="paper_set_balance"),
             InlineKeyboardButton("🔁 Réinitialiser", callback_data="paper_reset"),
         ],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
     await query.edit_message_text(
         text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def paper_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send a PDF performance report."""
+    query = update.callback_query
+    await query.answer("⏳ Génération du rapport PDF…")
+
+    from bot.models.trade import Trade, TradeStatus
+    from bot.services.polymarket import polymarket_client
+    from bot.services.report import build_report_data, generate_report_pdf
+    import asyncio
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+
+        us = await get_or_create_settings(session, user)
+
+        # Fetch all FILLED trades
+        result = await session.execute(
+            select(Trade).where(
+                Trade.user_id == user.id,
+                Trade.status == TradeStatus.FILLED,
+            ).order_by(Trade.created_at.desc())
+        )
+        trades = list(result.scalars().all())
+
+    # Fetch current prices for open positions
+    current_prices: dict[str, float] = {}
+    open_token_ids = {
+        t.token_id for t in trades
+        if not t.is_settled and t.side.value == "buy"
+    }
+
+    if open_token_ids:
+        async def _fetch_price(token_id: str) -> tuple[str, float]:
+            try:
+                price = await polymarket_client.get_price(token_id)
+                return token_id, price
+            except Exception:
+                return token_id, 0.0
+
+        results = await asyncio.gather(
+            *[_fetch_price(tid) for tid in open_token_ids],
+            return_exceptions=True,
+        )
+        for res in results:
+            if isinstance(res, tuple):
+                current_prices[res[0]] = res[1]
+
+    # Build report data and generate PDF
+    report_data = await build_report_data(user, us, trades, current_prices)
+    pdf_buffer = generate_report_pdf(report_data)
+
+    # Send PDF
+    from datetime import datetime, timezone
+    filename = (
+        f"wenpolymarket_report_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.pdf"
+    )
+
+    await query.message.reply_document(
+        document=pdf_buffer,
+        filename=filename,
+        caption=(
+            f"📄 **Rapport de performance WENPOLYMARKET**\n"
+            f"{'📝 Paper Trading' if user.paper_trading else '💵 Live Trading'}\n"
+            f"💼 Portefeuille : {report_data.portfolio_value:.2f} USDC\n"
+            f"{'📈' if report_data.total_pnl >= 0 else '📉'} "
+            f"PNL : {'+' if report_data.total_pnl >= 0 else ''}"
+            f"{report_data.total_pnl:.2f} USDC "
+            f"({'+' if report_data.total_pnl_pct >= 0 else ''}"
+            f"{report_data.total_pnl_pct:.1f}%)"
+        ),
+        parse_mode="Markdown",
     )
 
 
@@ -1498,6 +1648,75 @@ async def export_pk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     asyncio.create_task(_auto_delete())
 
 
+# ── Stop Copy ───────────────────────────────────────
+
+async def stop_copy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop copytrading — pauses paper if in paper mode, live if in live mode."""
+    query = update.callback_query
+    await query.answer()
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+
+        mode = "📝 Paper" if user.paper_trading else "💵 Live"
+
+        if user.is_paused:
+            await query.edit_message_text(
+                f"⚠️ Le copytrading ({mode}) est déjà en pause.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+                ]),
+            )
+            return
+
+        user.is_paused = True
+        await session.commit()
+
+    await query.edit_message_text(
+        f"🛑 **Copytrading arrêté**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Mode : {mode}\n"
+        f"Le bot ne copiera plus aucun trade tant que\n"
+        f"vous ne relancerez pas le copy.\n\n"
+        f"Pour reprendre, allez dans ⚙️ **Paramètres** → Reprendre\n"
+        f"ou utilisez la commande /resume.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("▶️ Reprendre le copy", callback_data="resume_copy")],
+            [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+        ]),
+    )
+
+
+async def resume_copy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Resume copytrading after stop."""
+    query = update.callback_query
+    await query.answer()
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+
+        mode = "📝 Paper" if user.paper_trading else "💵 Live"
+        user.is_paused = False
+        await session.commit()
+
+    await query.edit_message_text(
+        f"▶️ **Copytrading relancé !**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"Mode : {mode}\n"
+        f"Le bot copie à nouveau les trades de vos traders suivis.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+        ]),
+    )
+
+
 # ── Back to main menu ───────────────────────────────
 
 async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1573,9 +1792,12 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(delete_wallet_confirm, pattern=r"^delwallet_confirm_\d+$"),
         CallbackQueryHandler(delete_wallet_exec, pattern=r"^delwallet_exec_\d+$"),
         CallbackQueryHandler(menu_paper, pattern="^menu_paper$"),
+        CallbackQueryHandler(paper_report, pattern="^paper_report$"),
         CallbackQueryHandler(paper_set_balance, pattern="^paper_set_balance$"),
         CallbackQueryHandler(paper_init_callback, pattern=r"^paper_init_\d+$"),
         CallbackQueryHandler(paper_reset, pattern="^paper_reset$"),
         CallbackQueryHandler(export_pk, pattern="^export_pk$"),
+        CallbackQueryHandler(stop_copy, pattern="^stop_copy$"),
+        CallbackQueryHandler(resume_copy, pattern="^resume_copy$"),
         CallbackQueryHandler(menu_back, pattern="^menu_back$"),
     ]
