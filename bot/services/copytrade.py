@@ -453,14 +453,29 @@ class CopyTradeEngine:
                 pass
 
     async def _passes_filters(self, user_settings, signal: TradeSignal) -> bool:
-        """Check if a signal passes the user's filters (blacklist, categories, expiry)."""
+        """Check if a signal passes the user's filters (blacklist, categories, expiry,
+        and per-trader category exclusions)."""
         # Market blacklist
         if user_settings.blacklisted_markets:
             if signal.market_id in user_settings.blacklisted_markets:
                 return False
 
+        # Check if we need market metadata for any filter
+        has_global_cat_filter = bool(
+            user_settings.categories and len(user_settings.categories) > 0
+        )
+        has_per_trader_filter = False
+        trader_excluded = []
+        if user_settings.trader_filters and signal.master_wallet:
+            wallet_lower = signal.master_wallet.lower()
+            tf = user_settings.trader_filters.get(wallet_lower, {})
+            trader_excluded = tf.get("excluded_categories", [])
+            if trader_excluded:
+                has_per_trader_filter = True
+
         needs_market_meta = bool(
-            (user_settings.categories and len(user_settings.categories) > 0)
+            has_global_cat_filter
+            or has_per_trader_filter
             or user_settings.max_expiry_days
         )
         if not needs_market_meta:
@@ -468,16 +483,33 @@ class CopyTradeEngine:
 
         market = await polymarket_client.get_market_by_condition_id(signal.market_id)
         if not market:
-            # If we can't resolve market metadata, don't block the trade
             logger.warning(
                 f"Could not fetch market metadata for {signal.market_id[:10]}..., "
                 "skipping category/expiry filters."
             )
             return True
 
-        # Category filter
-        if user_settings.categories:
+        # Global category filter (whitelist)
+        if has_global_cat_filter:
             if not market.category or market.category not in user_settings.categories:
+                return False
+
+        # Per-trader category exclusion filter
+        if has_per_trader_filter and trader_excluded:
+            from bot.services.market_categories import categorize_market
+
+            market_cat = categorize_market(
+                title=signal.market_question or market.question or "",
+                slug=market.slug or "",
+                api_category=market.category or "",
+            )
+            # Check both exact tag ("Crypto/BTC") and top-level ("Crypto")
+            if market_cat.tag in trader_excluded or market_cat.category in trader_excluded:
+                logger.info(
+                    f"Trade blocked by per-trader filter: "
+                    f"{signal.master_wallet[:10]}... → {market_cat.tag} "
+                    f"(excluded: {trader_excluded})"
+                )
                 return False
 
         # Max expiry filter

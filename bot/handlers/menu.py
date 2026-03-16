@@ -2194,17 +2194,30 @@ async def trader_report_select(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
+    # Get exclusion counts per trader
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        us = await get_or_create_settings(session, user)
+        trader_filters = us.trader_filters or {}
+
     keyboard = []
     for w in followed:
         short = f"{w[:6]}...{w[-4:]}"
+        # Show exclusion count if any
+        excl_count = len(
+            trader_filters.get(w.lower(), {}).get("excluded_categories", [])
+        )
+        filter_badge = f" 🚫{excl_count}" if excl_count else ""
         keyboard.append([
             InlineKeyboardButton(f"📊 {short}", callback_data=f"trader_rpt_{w}"),
+            InlineKeyboardButton(f"🎯 Filtres{filter_badge}", callback_data=f"trader_cats_{w}"),
         ])
     keyboard.append([InlineKeyboardButton("🏠 Menu", callback_data="menu_back")])
 
     await query.edit_message_text(
         "📊 **RAPPORT TRADER**\n━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Choisissez le wallet du trader à analyser :",
+        "Choisissez un trader :\n"
+        "📊 = Rapport détaillé | 🎯 = Analyse & filtres par catégorie",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -2333,6 +2346,7 @@ async def trader_report_generate(update: Update, context: ContextTypes.DEFAULT_T
 
         keyboard = [
             [InlineKeyboardButton("🔄 Rafraîchir", callback_data=f"trader_rpt_{wallet}")],
+            [InlineKeyboardButton("🎯 Analyse & Filtres par catégorie", callback_data=f"trader_cats_{wallet}")],
             [
                 InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
                 InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
@@ -2357,6 +2371,261 @@ async def trader_report_generate(update: Update, context: ContextTypes.DEFAULT_T
             )
         except Exception:
             pass
+
+
+async def trader_category_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Analyze a trader's activity by market category and show filter toggles.
+
+    Shows a breakdown like:
+        Crypto/BTC — 120 trades (62%) | Vol: 5,400 USDC
+        Crypto/ETH — 40 trades (21%) | Vol: 1,800 USDC
+        Sports/NFL — 15 trades (8%) | Vol: 600 USDC
+    With toggle buttons [✅ Crypto/BTC] [❌ Crypto/XRP] to exclude categories.
+    """
+    query = update.callback_query
+    wallet = query.data.replace("trader_cats_", "")
+    await query.answer("⏳ Analyse des catégories…")
+
+    try:
+        from bot.services.polymarket import polymarket_client
+        from bot.services.market_categories import categorize_market
+        from datetime import datetime, timezone, timedelta
+        import asyncio
+
+        w_short = f"{wallet[:6]}...{wallet[-4:]}"
+
+        # Fetch user settings for current exclusions
+        async with async_session() as session:
+            user = await get_user_by_telegram_id(session, query.from_user.id)
+            if not user:
+                return
+            us = await get_or_create_settings(session, user)
+            trader_filters = us.trader_filters or {}
+            wallet_lower = wallet.lower()
+            current_exclusions = set(
+                trader_filters.get(wallet_lower, {}).get("excluded_categories", [])
+            )
+
+        # Fetch activities (paginated, last 7 days for good sample)
+        now = datetime.now(timezone.utc)
+        ts_7d = int((now - timedelta(days=7)).timestamp())
+        activities = await polymarket_client.get_activity_paginated(
+            wallet, start=ts_7d, max_trades=5000
+        )
+
+        # Also fetch current positions for live category info
+        positions = await polymarket_client.get_positions_by_address(wallet)
+
+        # ── Categorize all activities ──
+        category_stats: dict[str, dict] = {}  # tag → {trades, buys, sells, volume, pnl_est}
+
+        for act in activities:
+            cat = categorize_market(title=act.title, slug=act.slug)
+            tag = cat.tag
+
+            if tag not in category_stats:
+                category_stats[tag] = {
+                    "trades": 0,
+                    "buys": 0,
+                    "sells": 0,
+                    "volume": 0.0,
+                    "category": cat.category,
+                    "subcategory": cat.subcategory,
+                }
+
+            stats = category_stats[tag]
+            stats["trades"] += 1
+            stats["volume"] += act.usdc_size
+            if act.side.upper() == "BUY":
+                stats["buys"] += 1
+            else:
+                stats["sells"] += 1
+
+        # ── Categorize open positions ──
+        pos_by_cat: dict[str, dict] = {}  # tag → {count, invested, current}
+        for p in positions:
+            cat = categorize_market(title=p.title, slug=p.slug)
+            tag = cat.tag
+            if tag not in pos_by_cat:
+                pos_by_cat[tag] = {"count": 0, "invested": 0.0, "current": 0.0}
+            pos_by_cat[tag]["count"] += 1
+            pos_by_cat[tag]["invested"] += p.size * p.avg_price
+            pos_by_cat[tag]["current"] += p.size * p.current_price
+
+        # Sort by trade count
+        sorted_cats = sorted(
+            category_stats.items(), key=lambda x: x[1]["trades"], reverse=True
+        )
+
+        total_trades = sum(s["trades"] for _, s in sorted_cats)
+        total_volume = sum(s["volume"] for _, s in sorted_cats)
+
+        # ── Build message ──
+        text = (
+            f"🎯 **ANALYSE PAR CATÉGORIE**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 Trader : `{w_short}`\n"
+            f"📅 Derniers 7 jours | {total_trades} trades | {total_volume:,.0f} USDC\n\n"
+        )
+
+        cat_lines = []
+        for tag, stats in sorted_cats:
+            pct = (stats["trades"] / total_trades * 100) if total_trades > 0 else 0
+            excluded = tag in current_exclusions
+
+            # Status emoji
+            status = "🚫" if excluded else "✅"
+
+            # Bar chart (simple visual)
+            bar_len = max(1, int(pct / 5))
+            bar = "█" * bar_len + "░" * (20 - bar_len)
+
+            line = (
+                f"{status} **{tag}**\n"
+                f"   {bar} {pct:.0f}%\n"
+                f"   📊 {stats['trades']}t ({stats['buys']}B/{stats['sells']}S) • "
+                f"Vol: {stats['volume']:,.0f} USDC"
+            )
+
+            # Add position info if exists
+            if tag in pos_by_cat:
+                pc = pos_by_cat[tag]
+                pos_pnl = pc["current"] - pc["invested"]
+                line += (
+                    f"\n   💼 {pc['count']} pos ouvertes • "
+                    f"{'📈' if pos_pnl >= 0 else '📉'} {pos_pnl:+,.1f} USDC"
+                )
+
+            cat_lines.append(line)
+
+        text += "\n\n".join(cat_lines)
+
+        if current_exclusions:
+            text += (
+                f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+                f"🚫 **{len(current_exclusions)} catégorie(s) exclue(s)** — "
+                f"les trades de ce trader dans ces catégories seront ignorés"
+            )
+
+        # Truncate if needed
+        if len(text) > 3800:
+            text = text[:3750] + "\n\n_... tronqué, voir rapport HTML_"
+
+        # ── Build toggle buttons (2 per row) ──
+        keyboard: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for tag, stats in sorted_cats:
+            excluded = tag in current_exclusions
+            emoji = "🚫" if excluded else "✅"
+            # Encode: tcat_toggle_{wallet}_{tag}
+            # Tag might contain "/" so we use it directly (safe for callback_data)
+            btn_text = f"{emoji} {tag}"
+            # Limit button text length
+            if len(btn_text) > 30:
+                btn_text = btn_text[:27] + "…"
+            row.append(
+                InlineKeyboardButton(
+                    btn_text,
+                    callback_data=f"tcat_t_{wallet_lower}_{tag}",
+                )
+            )
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+
+        # Action buttons
+        keyboard.append([
+            InlineKeyboardButton("🔄 Rafraîchir", callback_data=f"trader_cats_{wallet}"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("📊 Rapport trader", callback_data=f"trader_rpt_{wallet}"),
+            InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🏠 Menu", callback_data="menu_back"),
+        ])
+
+        await query.edit_message_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    except Exception as e:
+        logger.error(f"trader_category_analysis error: {e}", exc_info=True)
+        try:
+            await query.edit_message_text(
+                f"❌ **Erreur analyse catégories**\n\n`{str(e)[:300]}`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+                ]),
+            )
+        except Exception:
+            pass
+
+
+async def trader_category_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle a category exclusion for a specific trader.
+
+    callback_data format: tcat_t_{wallet}_{category_tag}
+    Example: tcat_t_0x1234abcd_Crypto/BTC
+    """
+    query = update.callback_query
+
+    try:
+        # Parse callback data: tcat_t_{wallet}_{tag}
+        raw = query.data[len("tcat_t_"):]  # Remove "tcat_t_" prefix
+        # Wallet is 42 chars (0x + 40 hex), then underscore, then tag
+        wallet = raw[:42]
+        tag = raw[43:]  # Skip the underscore after wallet
+
+        if not tag or not wallet:
+            await query.answer("❌ Données invalides", show_alert=True)
+            return
+
+        async with async_session() as session:
+            user = await get_user_by_telegram_id(session, query.from_user.id)
+            if not user:
+                return
+            us = await get_or_create_settings(session, user)
+
+            # Get or init trader_filters
+            trader_filters = dict(us.trader_filters or {})
+            wallet_lower = wallet.lower()
+
+            if wallet_lower not in trader_filters:
+                trader_filters[wallet_lower] = {"excluded_categories": []}
+
+            excluded = list(trader_filters[wallet_lower].get("excluded_categories", []))
+
+            # Toggle
+            if tag in excluded:
+                excluded.remove(tag)
+                action = "✅ Activé"
+            else:
+                excluded.append(tag)
+                action = "🚫 Exclu"
+
+            trader_filters[wallet_lower]["excluded_categories"] = excluded
+            us.trader_filters = trader_filters
+
+            # Force SQLAlchemy to detect JSON change
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(us, "trader_filters")
+            await session.commit()
+
+        await query.answer(f"{action} : {tag}", show_alert=False)
+
+        # Refresh the category analysis view
+        # Rewrite callback_data to trigger trader_category_analysis
+        query.data = f"trader_cats_{wallet}"
+        await trader_category_analysis(update, context)
+
+    except Exception as e:
+        logger.error(f"trader_category_toggle error: {e}", exc_info=True)
+        await query.answer(f"❌ Erreur: {str(e)[:100]}", show_alert=True)
 
 
 def get_menu_handlers() -> list:
@@ -2384,6 +2653,8 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(dashboard_report_pdf, pattern="^dashboard_report_pdf$"),
         CallbackQueryHandler(trader_report_select, pattern="^trader_report$"),
         CallbackQueryHandler(trader_report_generate, pattern=r"^trader_rpt_0x[a-fA-F0-9]+$"),
+        CallbackQueryHandler(trader_category_analysis, pattern=r"^trader_cats_0x[a-fA-F0-9]+$"),
+        CallbackQueryHandler(trader_category_toggle, pattern=r"^tcat_t_0x[a-fA-F0-9]+_.+$"),
         CallbackQueryHandler(paper_set_balance, pattern="^paper_set_balance$"),
         CallbackQueryHandler(paper_init_callback, pattern=r"^paper_init_\d+$"),
         CallbackQueryHandler(paper_reset, pattern="^paper_reset$"),

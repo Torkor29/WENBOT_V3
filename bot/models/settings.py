@@ -59,6 +59,10 @@ class UserSettings(Base):
     blacklisted_markets: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     max_expiry_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Per-trader category filters
+    # Format: {"0xwallet": {"excluded_categories": ["Crypto/XRP", "Sports"]}, ...}
+    trader_filters: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+
     # Monitor mode (master tracking)
     # Ces flags décrivent comment ce follower souhaite que les masters
     # soient suivis. Dans la pratique, pour un bot mono-admin, ils servent
