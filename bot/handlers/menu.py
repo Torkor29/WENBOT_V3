@@ -1001,10 +1001,12 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if tf_parts:
             lines.append(f"   📊 {' | '.join(tf_parts)}")
 
-        # ── PNL depuis l'API (plus besoin de recalculer) ──
+        # ── PNL calculé sur positions ouvertes uniquement ──
         trader_unrealized = sum(p.cash_pnl for p in open_pos)
-        trader_realized = sum(p.realized_pnl for p in positions)
         trader_invested = sum(p.initial_value for p in open_pos)
+        trader_current = sum(p.current_value for p in open_pos)
+        # P&L réalisé = uniquement positions résolues visibles dans l'API
+        trader_realized = sum(p.realized_pnl for p in settled_pos)
         grand_unrealized += trader_unrealized
         grand_realized += trader_realized
         grand_invested += trader_invested
@@ -1017,9 +1019,9 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"   {e} **Ouvert : {trader_unrealized:+.2f}$ ({pnl_pct:+.1f}%)** "
                 f"sur {len(open_pos)} pos"
             )
-        if trader_realized != 0:
+        if settled_pos:
             e2 = "📈" if trader_realized >= 0 else "📉"
-            lines.append(f"   {e2} **Réalisé : {trader_realized:+.2f}$**")
+            lines.append(f"   {e2} **Résolus : {trader_realized:+.2f}$** ({len(settled_pos)} marchés)")
 
         # ── Top positions ouvertes ──
         if open_pos:
@@ -1073,6 +1075,7 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_dashboard"),
             InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
         ],
+        [InlineKeyboardButton("📄 Rapport PDF (mes trades)", callback_data="paper_report")],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
     ]
     await query.edit_message_text(
