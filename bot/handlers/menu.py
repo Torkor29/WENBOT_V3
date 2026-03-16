@@ -2313,14 +2313,13 @@ async def trader_report_generate(update: Update, context: ContextTypes.DEFAULT_T
 
         w_short = f"{wallet[:6]}...{wallet[-4:]}"
 
-        # Fetch positions and activity in parallel
-        positions_task = polymarket_client.get_positions_by_address(wallet)
-
         now = datetime.now(timezone.utc)
-        # Fetch activity for last 24h (max coverage)
+
+        # Fetch positions and activity (paginated, last 24h) in parallel
+        positions_task = polymarket_client.get_positions_by_address(wallet)
         ts_24h = int((now - timedelta(hours=24)).timestamp())
-        activity_task = polymarket_client.get_activity_by_address(
-            wallet, limit=500, start=ts_24h
+        activity_task = polymarket_client.get_activity_paginated(
+            wallet, start=ts_24h, max_trades=10000
         )
 
         positions, activities = await asyncio.gather(
@@ -2340,19 +2339,18 @@ async def trader_report_generate(update: Update, context: ContextTypes.DEFAULT_T
             ("24h", timedelta(hours=24)),
         ]
 
-        now_ts = int(now.timestamp())
         tf_lines = []
         for label, delta in timeframes:
             cutoff_ts = int((now - delta).timestamp())
             tf_acts = [a for a in activities if a.timestamp >= cutoff_ts]
-            buys = [a for a in tf_acts if a.side.upper() == "BUY"]
-            sells = [a for a in tf_acts if a.side.upper() == "SELL"]
+            buys = sum(1 for a in tf_acts if a.side.upper() == "BUY")
+            sells = sum(1 for a in tf_acts if a.side.upper() == "SELL")
             volume = sum(a.usdc_size for a in tf_acts)
             trades_count = len(tf_acts)
 
             tf_lines.append(
                 f"**{label}** : {trades_count} trades "
-                f"({len(buys)}B/{len(sells)}S) • "
+                f"({buys}B/{sells}S) • "
                 f"Vol: {volume:.0f} USDC"
             )
 
