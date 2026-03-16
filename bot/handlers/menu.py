@@ -522,6 +522,7 @@ async def menu_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def menu_traders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hub unique : voir, analyser, filtrer, ajouter, retirer des traders."""
     query = update.callback_query
     await query.answer()
 
@@ -538,10 +539,11 @@ async def menu_traders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "👥 **TRADERS SUIVIS**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "_Aucun trader suivi_\n\n"
-            "Ajoutez un wallet dans ⚙️ **Paramètres**."
+            "Ajoutez l'adresse Polygon (0x…) d'un trader\n"
+            "Polymarket pour copier ses positions."
         )
         keyboard = [
-            [InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings")],
+            [InlineKeyboardButton("➕ Ajouter un trader", callback_data="set_followed")],
             [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
         ]
         await query.edit_message_text(
@@ -549,17 +551,20 @@ async def menu_traders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    # Build list with clickable wallets
+    # ── Build per-trader rows ──
     lines = []
     keyboard = []
-    for i, w in enumerate(wallets, 1):
+    for i, w in enumerate(wallets):
         short = f"{w[:6]}...{w[-4:]}"
         excl = trader_filters.get(w.lower(), {}).get("excluded_categories", [])
         excl_badge = f" • 🚫 {len(excl)} filtre(s)" if excl else ""
-        lines.append(f"  {i}. `{short}`{excl_badge}")
+        lines.append(f"  {i + 1}. `{short}`{excl_badge}")
+
+        # 3 boutons par trader : Rapport | Filtres catégorie | Retirer
         keyboard.append([
             InlineKeyboardButton(f"📊 {short}", callback_data=f"trader_rpt_{w}"),
-            InlineKeyboardButton("🎯 Filtres", callback_data=f"trader_cats_{w}"),
+            InlineKeyboardButton("🎯", callback_data=f"trader_cats_{w}"),
+            InlineKeyboardButton("❌", callback_data=f"mt_rm_{i}"),
         ])
 
     wallet_text = "\n".join(lines)
@@ -567,20 +572,65 @@ async def menu_traders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "👥 **TRADERS SUIVIS**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{wallet_text}\n\n"
-        "📊 = Rapport détaillé du trader\n"
-        "🎯 = Analyse par catégorie + filtres\n\n"
-        "_Cliquez sur un trader pour l'analyser_"
+        "📊 Rapport détaillé\n"
+        "🎯 Analyse catégories & filtres\n"
+        "❌ Retirer le trader"
     )
 
     keyboard.append([
-        InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings"),
-        InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
+        InlineKeyboardButton("➕ Ajouter un trader", callback_data="set_followed"),
     ])
-    keyboard.append([InlineKeyboardButton("🏠 Menu", callback_data="menu_back")])
+    keyboard.append([
+        InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
+        InlineKeyboardButton("🏠 Menu", callback_data="menu_back"),
+    ])
 
     await query.edit_message_text(
         text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def menu_trader_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove a followed trader directly from the Traders suivis hub."""
+    query = update.callback_query
+
+    idx_str = query.data.replace("mt_rm_", "")
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await query.answer("❌ Index invalide", show_alert=True)
+        return
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        wallets = list(us.followed_wallets or [])
+
+        if 0 <= idx < len(wallets):
+            removed = wallets.pop(idx)
+            us.followed_wallets = wallets
+
+            # Also clean up trader_filters for removed wallet
+            trader_filters = dict(us.trader_filters or {})
+            trader_filters.pop(removed.lower(), None)
+            us.trader_filters = trader_filters
+
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(us, "followed_wallets")
+            flag_modified(us, "trader_filters")
+            await session.commit()
+
+            await query.answer(
+                f"✅ {removed[:6]}...{removed[-4:]} retiré", show_alert=False
+            )
+        else:
+            await query.answer("❌ Index invalide", show_alert=True)
+            return
+
+    # Refresh the traders menu
+    await menu_traders(update, context)
 
 
 async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2662,6 +2712,7 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(menu_deposit, pattern="^menu_deposit$"),
         CallbackQueryHandler(menu_withdraw, pattern="^menu_withdraw$"),
         CallbackQueryHandler(menu_traders, pattern="^menu_traders$"),
+        CallbackQueryHandler(menu_trader_remove, pattern=r"^mt_rm_\d+$"),
         CallbackQueryHandler(menu_settings, pattern="^menu_settings$"),
         CallbackQueryHandler(menu_bridge, pattern="^menu_bridge$"),
         CallbackQueryHandler(menu_history, pattern="^menu_history$"),

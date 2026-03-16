@@ -683,46 +683,10 @@ async def setting_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def followed_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Show the followed traders management menu."""
-    query = update.callback_query
-    await query.answer()
-
-    async with async_session() as session:
-        user = await get_user_by_telegram_id(session, query.from_user.id)
-        us = await get_or_create_settings(session, user)
-        wallets = us.followed_wallets or []
-
-    if wallets:
-        lines = []
-        for i, w in enumerate(wallets, 1):
-            lines.append(f"  {i}. `{w[:6]}...{w[-4:]}`")
-        wallet_text = "\n".join(lines)
-    else:
-        wallet_text = "  _Aucun trader suivi_"
-
-    keyboard = [
-        [InlineKeyboardButton("➕ Ajouter un trader", callback_data="follow_add")],
-    ]
-    for i, w in enumerate(wallets):
-        label = f"❌ Retirer {w[:6]}...{w[-4:]}"
-        keyboard.append(
-            [InlineKeyboardButton(label, callback_data=f"follow_rm_{i}")]
-        )
-    keyboard.append(
-        [InlineKeyboardButton("⬅️ Retour", callback_data="set_back_main")]
-    )
-
-    await query.edit_message_text(
-        "👤 **TRADERS SUIVIS**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{wallet_text}\n\n"
-        "Ajoutez l'adresse Polygon (0x...) d'un trader Polymarket "
-        "dont vous voulez copier les positions.\n\n"
-        "💡 Trouvez l'adresse sur le profil Polymarket du trader.",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-    return MAIN_MENU
+    """Go directly to the add-trader prompt (the list is managed in menu_traders)."""
+    # Skip the intermediate list — menu_traders already shows it.
+    # Go straight to add prompt.
+    return await follow_add_prompt(update, context)
 
 
 async def follow_add_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -731,18 +695,17 @@ async def follow_add_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
 
     keyboard = [
-        [InlineKeyboardButton("⬅️ Retour", callback_data="set_back_main")],
+        [InlineKeyboardButton("👥 Annuler — Traders suivis", callback_data="menu_traders")],
     ]
     await query.edit_message_text(
-        "➕ **Ajouter un trader à suivre**\n"
+        "➕ **AJOUTER UN TRADER**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Envoyez l'adresse Polygon (0x...) du trader à copier.\n\n"
+        "Envoyez l'adresse Polygon (0x…) du trader à copier.\n\n"
         "**Où trouver l'adresse :**\n"
         "1. Allez sur le profil Polymarket du trader\n"
-        "2. Copiez l'adresse de son wallet Polygon\n"
+        "2. Copiez l'adresse de son wallet\n"
         "3. Collez-la ici\n\n"
-        "**Format attendu :**\n"
-        "`0x1234...abcd` (42 caractères, commence par 0x)",
+        "**Format :** `0x1234...abcd` (42 caractères)",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -778,11 +741,9 @@ async def follow_add_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if addr_lower in [w.lower() for w in wallets]:
             await update.message.reply_text(
                 "⚠️ Vous suivez déjà ce trader !",
-            )
-            text, keyboard = _build_main_menu(us, user.paper_trading)
-            await update.message.reply_text(
-                text, parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders")],
+                ]),
             )
             return MAIN_MENU
 
@@ -793,12 +754,10 @@ async def follow_add_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"✅ Trader `{address[:6]}...{address[-4:]}` ajouté !\n\n"
             f"Vous suivez maintenant **{len(wallets)}** trader(s).",
             parse_mode="Markdown",
-        )
-
-        text, keyboard = _build_main_menu(us, user.paper_trading)
-        await update.message.reply_text(
-            text, parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders")],
+                [InlineKeyboardButton("➕ Ajouter un autre", callback_data="follow_add")],
+            ]),
         )
     return MAIN_MENU
 
@@ -940,6 +899,12 @@ async def receive_setting_value(
     return MAIN_MENU
 
 
+async def _exit_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Exit ConversationHandler and let menu.py handle the callback."""
+    # End the conversation so menu_traders handler in menu.py can pick it up
+    return ConversationHandler.END
+
+
 async def settings_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel settings edit."""
     await update.message.reply_text("✅ Paramètres fermés.")
@@ -967,11 +932,13 @@ def get_settings_handler() -> ConversationHandler:
             ],
             ADD_WALLET: [
                 CallbackQueryHandler(setting_selected, pattern="^set_back_main$"),
+                CallbackQueryHandler(_exit_to_menu, pattern="^menu_traders$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, follow_add_receive),
             ],
         },
         fallbacks=[
             CommandHandler("settings", settings_command),
+            CallbackQueryHandler(_exit_to_menu, pattern="^menu_traders$"),
         ],
         per_user=True,
         per_message=False,
