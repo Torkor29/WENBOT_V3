@@ -82,6 +82,9 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
             InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
             InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
         ],
+        [
+            InlineKeyboardButton("🔍 Scanner traders", callback_data="menu_scanner"),
+        ],
     ])
 
     # Stop / Resume Copy button — always visible
@@ -3059,6 +3062,420 @@ async def trader_category_toggle(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer(f"❌ Erreur: {str(e)[:100]}", show_alert=True)
 
 
+# ── Scanner Traders ─────────────────────────────────────
+
+_SCANNER_CATEGORIES = [
+    "Crypto", "Politics", "Sports", "Finance", "Tech",
+    "Economy", "Geopolitics", "Culture", "Weather", "Elections",
+]
+
+_VOLUME_PRESETS = [
+    ("Tout", None, None),
+    ("< 1M$", None, 1_000_000),
+    ("1M-10M$", 1_000_000, 10_000_000),
+    ("10M-100M$", 10_000_000, 100_000_000),
+    ("> 100M$", 100_000_000, None),
+]
+
+_TRADES_PRESETS = [
+    ("Tout", None, None),
+    ("< 100", None, 100),
+    ("100-1k", 100, 1_000),
+    ("1k-10k", 1_000, 10_000),
+    ("> 10k", 10_000, None),
+]
+
+
+def _get_scan_config(context) -> dict:
+    """Get or init scanner config from user_data."""
+    if "scanner" not in context.user_data:
+        context.user_data["scanner"] = {
+            "categories": ["Crypto"],
+            "pnl_1d": True,
+            "pnl_1w": True,
+            "pnl_1m": True,
+            "trades_preset": 0,  # Index into _TRADES_PRESETS
+            "volume_preset": 0,  # Index into _VOLUME_PRESETS
+            "period": "1w",
+        }
+    return context.user_data["scanner"]
+
+
+def _build_scanner_menu(cfg: dict) -> tuple[str, list]:
+    """Build the scanner configuration menu text and keyboard."""
+    # Categories
+    cats = cfg["categories"]
+    cat_text = ", ".join(cats) if cats else "Aucune"
+
+    # PNL filters
+    pnl_parts = []
+    if cfg["pnl_1d"]:
+        pnl_parts.append("1D ✅")
+    else:
+        pnl_parts.append("1D ❌")
+    if cfg["pnl_1w"]:
+        pnl_parts.append("1W ✅")
+    else:
+        pnl_parts.append("1W ❌")
+    if cfg["pnl_1m"]:
+        pnl_parts.append("1M ✅")
+    else:
+        pnl_parts.append("1M ❌")
+
+    # Presets
+    trades_label = _TRADES_PRESETS[cfg["trades_preset"]][0]
+    volume_label = _VOLUME_PRESETS[cfg["volume_preset"]][0]
+    period_labels = {"1d": "Aujourd'hui", "1w": "Cette semaine", "1m": "Ce mois", "all": "Tout"}
+    period_label = period_labels.get(cfg["period"], cfg["period"])
+
+    text = (
+        "🔍 **SCANNER DE TRADERS**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Configure tes critères puis lance le scan.\n"
+        "Le scanner analyse le leaderboard Polymarket\n"
+        "et filtre les traders selon tes critères.\n\n"
+        f"📂 **Catégories** : {cat_text}\n"
+        f"📅 **Période** : {period_label}\n"
+        f"💰 **Bénéfice** : {' | '.join(pnl_parts)}\n"
+        f"📊 **Nb marchés** : {trades_label}\n"
+        f"💵 **Volume** : {volume_label}\n"
+    )
+
+    # Build keyboard
+    keyboard = []
+
+    # Row 1-2: Category toggles (5 per row)
+    for row_start in range(0, len(_SCANNER_CATEGORIES), 4):
+        row = []
+        for cat in _SCANNER_CATEGORIES[row_start:row_start + 4]:
+            emoji = "✅" if cat in cats else "⬜"
+            row.append(InlineKeyboardButton(
+                f"{emoji} {cat}", callback_data=f"scan_cat_{cat}"
+            ))
+        keyboard.append(row)
+
+    # Period selector
+    keyboard.append([
+        InlineKeyboardButton(
+            f"{'🔘' if cfg['period'] == '1d' else '⚪'} 1D",
+            callback_data="scan_period_1d",
+        ),
+        InlineKeyboardButton(
+            f"{'🔘' if cfg['period'] == '1w' else '⚪'} 1W",
+            callback_data="scan_period_1w",
+        ),
+        InlineKeyboardButton(
+            f"{'🔘' if cfg['period'] == '1m' else '⚪'} 1M",
+            callback_data="scan_period_1m",
+        ),
+    ])
+
+    # PNL filters
+    keyboard.append([
+        InlineKeyboardButton(
+            f"{'✅' if cfg['pnl_1d'] else '❌'} Bénéf 1D",
+            callback_data="scan_pnl_1d",
+        ),
+        InlineKeyboardButton(
+            f"{'✅' if cfg['pnl_1w'] else '❌'} Bénéf 1W",
+            callback_data="scan_pnl_1w",
+        ),
+        InlineKeyboardButton(
+            f"{'✅' if cfg['pnl_1m'] else '❌'} Bénéf 1M",
+            callback_data="scan_pnl_1m",
+        ),
+    ])
+
+    # Trades preset
+    keyboard.append([
+        InlineKeyboardButton(
+            f"📊 Marchés: {trades_label}", callback_data="scan_trades_next"
+        ),
+        InlineKeyboardButton(
+            f"💵 Volume: {volume_label}", callback_data="scan_volume_next"
+        ),
+    ])
+
+    # Action buttons
+    keyboard.append([
+        InlineKeyboardButton("🔍 LANCER LE SCAN", callback_data="scan_run"),
+    ])
+    keyboard.append([
+        InlineKeyboardButton("🏠 Menu", callback_data="menu_back"),
+    ])
+
+    return text, keyboard
+
+
+async def menu_scanner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the scanner configuration menu."""
+    query = update.callback_query
+    await query.answer()
+
+    cfg = _get_scan_config(context)
+    text, keyboard = _build_scanner_menu(cfg)
+
+    await query.edit_message_text(
+        text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def scan_toggle_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle a category in scanner config."""
+    query = update.callback_query
+    cat = query.data.replace("scan_cat_", "")
+
+    cfg = _get_scan_config(context)
+    if cat in cfg["categories"]:
+        cfg["categories"].remove(cat)
+    else:
+        cfg["categories"].append(cat)
+
+    await query.answer(f"{'✅' if cat in cfg['categories'] else '❌'} {cat}")
+
+    text, keyboard = _build_scanner_menu(cfg)
+    await query.edit_message_text(
+        text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def scan_toggle_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle a PNL filter."""
+    query = update.callback_query
+    period = query.data.replace("scan_pnl_", "")  # "1d", "1w", "1m"
+    key = f"pnl_{period}"
+
+    cfg = _get_scan_config(context)
+    cfg[key] = not cfg[key]
+
+    await query.answer(f"{'✅' if cfg[key] else '❌'} Bénéfice {period.upper()}")
+
+    text, keyboard = _build_scanner_menu(cfg)
+    await query.edit_message_text(
+        text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def scan_set_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the leaderboard period."""
+    query = update.callback_query
+    period = query.data.replace("scan_period_", "")
+
+    cfg = _get_scan_config(context)
+    cfg["period"] = period
+
+    await query.answer(f"📅 Période: {period.upper()}")
+
+    text, keyboard = _build_scanner_menu(cfg)
+    await query.edit_message_text(
+        text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def scan_cycle_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cycle through trades presets."""
+    query = update.callback_query
+    cfg = _get_scan_config(context)
+    cfg["trades_preset"] = (cfg["trades_preset"] + 1) % len(_TRADES_PRESETS)
+
+    label = _TRADES_PRESETS[cfg["trades_preset"]][0]
+    await query.answer(f"📊 Marchés: {label}")
+
+    text, keyboard = _build_scanner_menu(cfg)
+    await query.edit_message_text(
+        text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def scan_cycle_volume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cycle through volume presets."""
+    query = update.callback_query
+    cfg = _get_scan_config(context)
+    cfg["volume_preset"] = (cfg["volume_preset"] + 1) % len(_VOLUME_PRESETS)
+
+    label = _VOLUME_PRESETS[cfg["volume_preset"]][0]
+    await query.answer(f"💵 Volume: {label}")
+
+    text, keyboard = _build_scanner_menu(cfg)
+    await query.edit_message_text(
+        text, parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def scan_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Execute the scan with current config."""
+    query = update.callback_query
+    await query.answer()
+
+    cfg = _get_scan_config(context)
+
+    if not cfg["categories"]:
+        await query.edit_message_text(
+            "❌ **Sélectionnez au moins une catégorie.**",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Retour", callback_data="menu_scanner")],
+            ]),
+        )
+        return
+
+    # Show progress
+    await query.edit_message_text(
+        "🔍 **SCAN EN COURS…**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📂 Catégories : {', '.join(cfg['categories'])}\n"
+        "📡 Scraping du leaderboard…\n\n"
+        "_Cela peut prendre 30-60 secondes._",
+        parse_mode="Markdown",
+    )
+
+    try:
+        from bot.services.scanner import ScanFilters, run_scan
+
+        trades_preset = _TRADES_PRESETS[cfg["trades_preset"]]
+        volume_preset = _VOLUME_PRESETS[cfg["volume_preset"]]
+
+        filters = ScanFilters(
+            categories=cfg["categories"],
+            period=cfg["period"],
+            pnl_1d_positive=cfg["pnl_1d"],
+            pnl_1w_positive=cfg["pnl_1w"],
+            pnl_1m_positive=cfg["pnl_1m"],
+            trades_min=trades_preset[1],
+            trades_max=trades_preset[2],
+            volume_min=volume_preset[1],
+            volume_max=volume_preset[2],
+            max_profiles=30,
+        )
+
+        # Progress callback
+        async def _progress(current, total, msg):
+            try:
+                await query.edit_message_text(
+                    f"🔍 **SCAN EN COURS…**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"{msg}\n"
+                    f"{'█' * max(1, int(current / max(total, 1) * 20))}"
+                    f"{'░' * (20 - max(1, int(current / max(total, 1) * 20)))}"
+                    f" {current}/{total}",
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                pass
+
+        results = await run_scan(filters, progress_callback=_progress)
+
+        # Build results message
+        if not results:
+            await query.edit_message_text(
+                "🔍 **RÉSULTATS DU SCAN**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "❌ **Aucun trader ne correspond à tes critères.**\n\n"
+                "Essaie d'assouplir tes filtres (moins de conditions PNL,\n"
+                "ou un volume/nombre de marchés plus large).",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⬅️ Modifier les filtres", callback_data="menu_scanner")],
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+                ]),
+            )
+            return
+
+        # Format results
+        text = (
+            f"🔍 **RÉSULTATS DU SCAN**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ **{len(results)} traders** correspondent\n\n"
+        )
+
+        keyboard = []
+        for i, t in enumerate(results[:15]):  # Max 15 results
+            name = t.pseudonym or t.username or f"{t.wallet[:6]}...{t.wallet[-4:]}"
+            if len(name) > 20:
+                name = name[:17] + "…"
+
+            pnl_emoji = "📈" if t.pnl_total >= 0 else "📉"
+            eff = f"{t.pnl_volume_ratio:.1f}%" if t.volume > 0 else "N/A"
+
+            text += (
+                f"**{i + 1}. {name}**\n"
+                f"   {pnl_emoji} PNL: {t.pnl_1d:+,.0f}$ (1D) | "
+                f"{t.pnl_1w:+,.0f}$ (1W) | {t.pnl_1m:+,.0f}$ (1M)\n"
+                f"   📊 {t.markets_traded} marchés | 💵 {t.volume:,.0f}$ | "
+                f"⚡ Eff: {eff}\n\n"
+            )
+
+            w_short = f"{t.wallet[:6]}…{t.wallet[-4:]}"
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📊 {w_short}", callback_data=f"trader_rpt_{t.wallet}"
+                ),
+                InlineKeyboardButton(
+                    "➕ Suivre", callback_data=f"scan_follow_{t.wallet}"
+                ),
+            ])
+
+        # Truncate text if needed
+        if len(text) > 3800:
+            text = text[:3750] + "\n\n_… résultats tronqués_"
+
+        keyboard.append([
+            InlineKeyboardButton("⬅️ Modifier les filtres", callback_data="menu_scanner"),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🏠 Menu", callback_data="menu_back"),
+        ])
+
+        await query.edit_message_text(
+            text, parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    except Exception as e:
+        logger.error(f"scan_run error: {e}", exc_info=True)
+        await query.edit_message_text(
+            f"❌ **Erreur pendant le scan**\n\n`{str(e)[:300]}`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Réessayer", callback_data="scan_run")],
+                [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+            ]),
+        )
+
+
+async def scan_follow_trader(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Follow a trader directly from scan results."""
+    query = update.callback_query
+    wallet = query.data.replace("scan_follow_", "")
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        wallets = list(us.followed_wallets or [])
+
+        if wallet.lower() in [w.lower() for w in wallets]:
+            await query.answer("⚠️ Vous suivez déjà ce trader !", show_alert=True)
+            return
+
+        wallets.append(wallet)
+        us.followed_wallets = wallets
+
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(us, "followed_wallets")
+        await session.commit()
+
+    w_short = f"{wallet[:6]}...{wallet[-4:]}"
+    await query.answer(f"✅ {w_short} ajouté aux traders suivis !", show_alert=True)
+
+
 def get_menu_handlers() -> list:
     return [
         CallbackQueryHandler(menu_balance, pattern="^menu_balance$"),
@@ -3089,6 +3506,15 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(trader_single_pdf, pattern=r"^trader_pdf_0x[a-fA-F0-9]+$"),
         CallbackQueryHandler(trader_category_analysis, pattern=r"^trader_cats_0x[a-fA-F0-9]+$"),
         CallbackQueryHandler(trader_category_toggle, pattern=r"^tcat_t_0x[a-fA-F0-9]+_.+$"),
+        # Scanner
+        CallbackQueryHandler(menu_scanner, pattern="^menu_scanner$"),
+        CallbackQueryHandler(scan_toggle_category, pattern=r"^scan_cat_.+$"),
+        CallbackQueryHandler(scan_toggle_pnl, pattern=r"^scan_pnl_.+$"),
+        CallbackQueryHandler(scan_set_period, pattern=r"^scan_period_.+$"),
+        CallbackQueryHandler(scan_cycle_trades, pattern="^scan_trades_next$"),
+        CallbackQueryHandler(scan_cycle_volume, pattern="^scan_volume_next$"),
+        CallbackQueryHandler(scan_run, pattern="^scan_run$"),
+        CallbackQueryHandler(scan_follow_trader, pattern=r"^scan_follow_0x[a-fA-F0-9]+$"),
         CallbackQueryHandler(paper_set_balance, pattern="^paper_set_balance$"),
         CallbackQueryHandler(paper_init_callback, pattern=r"^paper_init_\d+$"),
         CallbackQueryHandler(paper_reset, pattern="^paper_reset$"),
