@@ -48,6 +48,7 @@ async def init_db() -> None:
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS is_paper BOOLEAN DEFAULT false",
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS is_settled BOOLEAN DEFAULT false",
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS settlement_pnl FLOAT",
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS market_outcome VARCHAR(64)",
         ]
         for stmt in migrations:
             await conn.execute(text(stmt))
