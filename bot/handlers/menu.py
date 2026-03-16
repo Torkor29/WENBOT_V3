@@ -2423,12 +2423,15 @@ async def trader_report_generate(update: Update, context: ContextTypes.DEFAULT_T
 
         keyboard = [
             [InlineKeyboardButton("🔄 Rafraîchir", callback_data=f"trader_rpt_{wallet}")],
+            [
+                InlineKeyboardButton("📊 Rapport HTML", callback_data=f"trader_html_{wallet}"),
+                InlineKeyboardButton("📄 Rapport PDF", callback_data=f"trader_pdf_{wallet}"),
+            ],
             [InlineKeyboardButton("🎯 Analyse & Filtres par catégorie", callback_data=f"trader_cats_{wallet}")],
             [
-                InlineKeyboardButton("📡 Dashboard", callback_data="menu_dashboard"),
-                InlineKeyboardButton("📋 Récap", callback_data="menu_recap"),
+                InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders"),
+                InlineKeyboardButton("🏠 Menu", callback_data="menu_back"),
             ],
-            [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
         ]
 
         await query.edit_message_text(
@@ -2443,6 +2446,359 @@ async def trader_report_generate(update: Update, context: ContextTypes.DEFAULT_T
                 f"❌ **Erreur rapport trader**\n\n`{str(e)[:300]}`",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+                ]),
+            )
+        except Exception:
+            pass
+
+
+async def _fetch_single_trader_data(wallet: str) -> dict:
+    """Fetch positions, activity, and profile for a single trader. Shared by HTML/PDF."""
+    from bot.services.polymarket import polymarket_client
+    from bot.services.market_categories import categorize_market
+    from datetime import datetime, timezone, timedelta
+    import asyncio
+
+    now = datetime.now(timezone.utc)
+    ts_7d = int((now - timedelta(days=7)).timestamp())
+
+    # Fetch all data in parallel
+    positions_task = polymarket_client.get_positions_by_address(wallet)
+    activity_task = polymarket_client.get_activity_paginated(wallet, start=ts_7d, max_trades=5000)
+    profile_task = polymarket_client.get_trader_profile(wallet)
+
+    positions, activities, profile = await asyncio.gather(
+        positions_task, activity_task, profile_task, return_exceptions=True
+    )
+    if isinstance(positions, Exception):
+        positions = []
+    if isinstance(activities, Exception):
+        activities = []
+    if isinstance(profile, Exception):
+        profile = None
+
+    # Timeframe stats
+    timeframes = [
+        ("1h", timedelta(hours=1)),
+        ("3h", timedelta(hours=3)),
+        ("5h", timedelta(hours=5)),
+        ("24h", timedelta(hours=24)),
+        ("7j", timedelta(days=7)),
+    ]
+    tf_stats = []
+    for label, delta in timeframes:
+        cutoff_ts = int((now - delta).timestamp())
+        tf_acts = [a for a in activities if a.timestamp >= cutoff_ts]
+        buys = sum(1 for a in tf_acts if a.side.upper() == "BUY")
+        sells = sum(1 for a in tf_acts if a.side.upper() == "SELL")
+        volume = sum(a.usdc_size for a in tf_acts)
+        tf_stats.append({
+            "label": label, "trades": len(tf_acts),
+            "buys": buys, "sells": sells, "volume": volume,
+        })
+
+    # Category breakdown
+    cat_stats: dict[str, dict] = {}
+    for act in activities:
+        cat = categorize_market(title=act.title, slug=act.slug)
+        tag = cat.tag
+        if tag not in cat_stats:
+            cat_stats[tag] = {"trades": 0, "buys": 0, "sells": 0, "volume": 0.0}
+        cat_stats[tag]["trades"] += 1
+        cat_stats[tag]["volume"] += act.usdc_size
+        if act.side.upper() == "BUY":
+            cat_stats[tag]["buys"] += 1
+        else:
+            cat_stats[tag]["sells"] += 1
+
+    # Positions enrichment
+    total_invested = 0.0
+    total_current = 0.0
+    pos_list = []
+    positions.sort(key=lambda p: p.size * p.current_price, reverse=True)
+    for p in positions:
+        invested = p.size * p.avg_price
+        current_val = p.size * p.current_price
+        pnl = current_val - invested
+        total_invested += invested
+        total_current += current_val
+        pos_list.append({
+            "title": p.title, "outcome": p.outcome,
+            "avg_price": p.avg_price, "current_price": p.current_price,
+            "size": p.size, "invested": invested,
+            "current_val": current_val, "pnl": pnl,
+            "pnl_pct": p.pnl_pct,
+        })
+
+    return {
+        "wallet": wallet,
+        "w_short": f"{wallet[:6]}...{wallet[-4:]}",
+        "generated_at": now.strftime("%d/%m/%Y %H:%M UTC"),
+        "profile": profile,
+        "positions": pos_list,
+        "total_positions": len(positions),
+        "total_invested": total_invested,
+        "total_current": total_current,
+        "total_pnl": total_current - total_invested,
+        "total_pnl_pct": ((total_current - total_invested) / total_invested * 100) if total_invested > 0 else 0,
+        "tf_stats": tf_stats,
+        "cat_stats": dict(sorted(cat_stats.items(), key=lambda x: x[1]["trades"], reverse=True)),
+        "total_trades_7d": len(activities),
+        "total_volume_7d": sum(a.usdc_size for a in activities),
+    }
+
+
+def _generate_single_trader_html(data: dict) -> "io.BytesIO":
+    """Generate a self-contained HTML report for a single trader."""
+    import io
+    from datetime import datetime
+
+    profile = data.get("profile")
+    pnl_color = "#4ade80" if data["total_pnl"] >= 0 else "#f87171"
+
+    # Profile section
+    profile_html = ""
+    if profile:
+        profile_html = f"""
+        <div class="profile-card">
+            <h3>👤 {profile.pseudonym or profile.username or data['w_short']}</h3>
+            <div class="stat-grid">
+                <div class="stat"><span class="label">PNL Total</span><span class="value" style="color:{'#4ade80' if profile.pnl_total >= 0 else '#f87171'}">{profile.pnl_total:+,.2f}$</span></div>
+                <div class="stat"><span class="label">PNL 1J</span><span class="value" style="color:{'#4ade80' if profile.pnl_1d >= 0 else '#f87171'}">{profile.pnl_1d:+,.2f}$</span></div>
+                <div class="stat"><span class="label">PNL 1S</span><span class="value" style="color:{'#4ade80' if profile.pnl_1w >= 0 else '#f87171'}">{profile.pnl_1w:+,.2f}$</span></div>
+                <div class="stat"><span class="label">PNL 1M</span><span class="value" style="color:{'#4ade80' if profile.pnl_1m >= 0 else '#f87171'}">{profile.pnl_1m:+,.2f}$</span></div>
+                <div class="stat"><span class="label">Volume</span><span class="value">{profile.volume:,.0f}$</span></div>
+                <div class="stat"><span class="label">Marchés</span><span class="value">{profile.markets_traded}</span></div>
+            </div>
+        </div>"""
+
+    # Timeframe rows
+    tf_rows = ""
+    for tf in data["tf_stats"]:
+        tf_rows += f"""<tr>
+            <td><strong>{tf['label']}</strong></td>
+            <td>{tf['trades']}</td>
+            <td>{tf['buys']}</td>
+            <td>{tf['sells']}</td>
+            <td>{tf['volume']:,.0f} USDC</td>
+        </tr>"""
+
+    # Category rows
+    cat_rows = ""
+    total_trades = data["total_trades_7d"] or 1
+    for tag, stats in data["cat_stats"].items():
+        pct = stats["trades"] / total_trades * 100
+        bar_w = max(2, int(pct))
+        cat_rows += f"""<tr>
+            <td><strong>{tag}</strong></td>
+            <td>{stats['trades']}</td>
+            <td>{stats['buys']}</td>
+            <td>{stats['sells']}</td>
+            <td>{stats['volume']:,.0f}</td>
+            <td><div class="bar" style="width:{bar_w}%">{pct:.0f}%</div></td>
+        </tr>"""
+
+    # Positions rows
+    pos_rows = ""
+    for i, p in enumerate(data["positions"]):
+        vis = "" if i < 10 else ' class="hidden-pos"'
+        pnl_c = "#4ade80" if p["pnl"] >= 0 else "#f87171"
+        outcome_dot = "🟢" if p["outcome"].lower() == "yes" else "🔴"
+        title_safe = p["title"].replace("<", "&lt;").replace(">", "&gt;")
+        pos_rows += f"""<tr{vis}>
+            <td>{outcome_dot} {title_safe[:50]}</td>
+            <td>{p['outcome']}</td>
+            <td>{p['avg_price']:.3f}</td>
+            <td>{p['current_price']:.3f}</td>
+            <td>{p['size']:.1f}</td>
+            <td style="color:{pnl_c}">{p['pnl']:+.2f}</td>
+            <td style="color:{pnl_c}">{p['pnl_pct']:+.1f}%</td>
+        </tr>"""
+
+    show_more_btn = ""
+    if len(data["positions"]) > 10:
+        show_more_btn = f'<button class="toggle-btn" onclick="togglePositions()">Voir les {len(data["positions"]) - 10} autres positions</button>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rapport Trader {data['w_short']}</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0f0f0f;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:16px;max-width:1000px;margin:0 auto}}
+h1{{color:#f59e0b;font-size:1.5em;margin-bottom:4px}}
+h2{{color:#f59e0b;font-size:1.1em;margin:20px 0 8px;border-bottom:1px solid #333;padding-bottom:4px}}
+.header{{background:#1a1a2e;border-radius:12px;padding:16px;margin-bottom:16px}}
+.header .sub{{color:#888;font-size:0.85em}}
+.summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}}
+.summary .card{{background:#1a1a2e;border-radius:8px;padding:12px;text-align:center}}
+.summary .card .val{{font-size:1.4em;font-weight:bold}}
+.summary .card .lbl{{color:#888;font-size:0.8em}}
+.profile-card{{background:#1a1a2e;border-radius:12px;padding:16px;margin-bottom:16px}}
+.stat-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:8px}}
+.stat{{background:#252540;border-radius:8px;padding:8px;text-align:center}}
+.stat .label{{display:block;color:#888;font-size:0.75em}}
+.stat .value{{display:block;font-weight:bold;font-size:1.1em}}
+table{{width:100%;border-collapse:collapse;font-size:0.85em;margin:8px 0}}
+th{{background:#1a1a2e;color:#f59e0b;padding:8px;text-align:left}}
+td{{padding:6px 8px;border-bottom:1px solid #222}}
+tr:hover{{background:#1a1a2e}}
+.bar{{background:#f59e0b;color:#000;padding:2px 6px;border-radius:4px;font-size:0.75em;min-width:24px;text-align:center}}
+.hidden-pos{{display:none}}
+.toggle-btn{{background:#f59e0b;color:#000;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-weight:bold;margin:8px 0;width:100%}}
+.toggle-btn:hover{{background:#d97706}}
+.footer{{text-align:center;color:#555;font-size:0.75em;margin-top:20px;padding-top:10px;border-top:1px solid #222}}
+</style></head><body>
+
+<div class="header">
+    <h1>📊 Rapport Trader</h1>
+    <div class="sub">🔗 {data['w_short']} — {data['generated_at']}</div>
+</div>
+
+{profile_html}
+
+<div class="summary">
+    <div class="card"><div class="val" style="color:{pnl_color}">{data['total_pnl']:+,.2f}$</div><div class="lbl">PNL Positions</div></div>
+    <div class="card"><div class="val">{data['total_invested']:,.0f}$</div><div class="lbl">Investi</div></div>
+    <div class="card"><div class="val">{data['total_current']:,.0f}$</div><div class="lbl">Valeur actuelle</div></div>
+    <div class="card"><div class="val">{data['total_positions']}</div><div class="lbl">Positions</div></div>
+    <div class="card"><div class="val">{data['total_trades_7d']}</div><div class="lbl">Trades 7j</div></div>
+    <div class="card"><div class="val">{data['total_volume_7d']:,.0f}$</div><div class="lbl">Volume 7j</div></div>
+</div>
+
+<h2>📈 Activité par timeframe</h2>
+<table><thead><tr><th>Période</th><th>Trades</th><th>Buys</th><th>Sells</th><th>Volume</th></tr></thead>
+<tbody>{tf_rows}</tbody></table>
+
+<h2>🎯 Répartition par catégorie (7j)</h2>
+<table><thead><tr><th>Catégorie</th><th>Trades</th><th>B</th><th>S</th><th>Volume</th><th>%</th></tr></thead>
+<tbody>{cat_rows}</tbody></table>
+
+<h2>💼 Positions ouvertes ({data['total_positions']})</h2>
+<table><thead><tr><th>Marché</th><th>Side</th><th>Entry</th><th>Current</th><th>Shares</th><th>PNL</th><th>%</th></tr></thead>
+<tbody>{pos_rows}</tbody></table>
+{show_more_btn}
+
+<div class="footer">WenPolymarket Bot — Généré le {data['generated_at']}</div>
+
+<script>
+function togglePositions(){{
+    document.querySelectorAll('.hidden-pos').forEach(r=>{{
+        r.style.display = r.style.display==='none'||!r.style.display ? 'table-row':'none';
+    }});
+    const btn=event.target;
+    btn.textContent=btn.textContent.startsWith('Voir')?'Masquer':'Voir les {len(data["positions"])-10 if len(data["positions"])>10 else 0} autres positions';
+}}
+</script>
+</body></html>"""
+
+    buf = io.BytesIO(html.encode("utf-8"))
+    buf.name = f"trader_{data['w_short']}.html"
+    buf.seek(0)
+    return buf
+
+
+async def trader_single_html(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send an HTML report for a single followed trader."""
+    query = update.callback_query
+    wallet = query.data.replace("trader_html_", "")
+    await query.answer("⏳ Génération du rapport HTML…")
+
+    try:
+        data = await _fetch_single_trader_data(wallet)
+        html_buf = _generate_single_trader_html(data)
+
+        from datetime import datetime, timezone
+        filename = f"trader_{data['w_short']}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.html"
+        pnl = data["total_pnl"]
+        await query.message.reply_document(
+            document=html_buf,
+            filename=filename,
+            caption=(
+                f"📊 **Rapport HTML — Trader {data['w_short']}**\n"
+                f"💼 {data['total_positions']} positions | "
+                f"{data['total_trades_7d']} trades (7j)\n"
+                f"{'📈' if pnl >= 0 else '📉'} PNL : {pnl:+,.2f} USDC"
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.error(f"trader_single_html error: {e}", exc_info=True)
+        try:
+            await query.edit_message_text(
+                f"❌ **Erreur rapport HTML**\n\n`{str(e)[:300]}`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Réessayer", callback_data=f"trader_html_{wallet}")],
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+                ]),
+            )
+        except Exception:
+            pass
+
+
+async def trader_single_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send a PDF report for a single followed trader."""
+    query = update.callback_query
+    wallet = query.data.replace("trader_pdf_", "")
+    await query.answer("⏳ Génération du PDF…")
+
+    try:
+        data = await _fetch_single_trader_data(wallet)
+
+        # Build a simple PDF using the existing report infrastructure
+        from bot.services.report import TraderSection, TraderReportData, generate_trader_report_pdf
+
+        profile = data.get("profile")
+        w_short = data["w_short"]
+        section = TraderSection(
+            wallet=data["wallet"],
+            wallet_short=w_short,
+            username=profile.username if profile else "",
+            pseudonym=profile.pseudonym if profile else "",
+            pnl_total=profile.pnl_total if profile else 0,
+            pnl_1d=profile.pnl_1d if profile else 0,
+            pnl_1w=profile.pnl_1w if profile else 0,
+            pnl_1m=profile.pnl_1m if profile else 0,
+            volume=profile.volume if profile else 0,
+            markets_traded=profile.markets_traded if profile else 0,
+            has_profile=profile is not None,
+            total_invested=data["total_invested"],
+            total_current=data["total_current"],
+            total_unrealized=data["total_pnl"],
+        )
+
+        report_data = TraderReportData(
+            username=f"Trader {w_short}",
+            traders=[section],
+            total_open_positions=data["total_positions"],
+            grand_unrealized=data["total_pnl"],
+        )
+
+        pdf_buffer = generate_trader_report_pdf(report_data)
+
+        from datetime import datetime, timezone
+        filename = f"trader_{data['w_short']}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.pdf"
+        pnl = data["total_pnl"]
+        await query.message.reply_document(
+            document=pdf_buffer,
+            filename=filename,
+            caption=(
+                f"📄 **Rapport PDF — Trader {data['w_short']}**\n"
+                f"💼 {data['total_positions']} positions | "
+                f"{data['total_trades_7d']} trades (7j)\n"
+                f"{'📈' if pnl >= 0 else '📉'} PNL : {pnl:+,.2f} USDC"
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.error(f"trader_single_pdf error: {e}", exc_info=True)
+        try:
+            await query.edit_message_text(
+                f"❌ **Erreur rapport PDF**\n\n`{str(e)[:300]}`",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Réessayer", callback_data=f"trader_pdf_{wallet}")],
                     [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
                 ]),
             )
@@ -2731,6 +3087,8 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(dashboard_report_pdf, pattern="^dashboard_report_pdf$"),
         CallbackQueryHandler(trader_report_select, pattern="^trader_report$"),
         CallbackQueryHandler(trader_report_generate, pattern=r"^trader_rpt_0x[a-fA-F0-9]+$"),
+        CallbackQueryHandler(trader_single_html, pattern=r"^trader_html_0x[a-fA-F0-9]+$"),
+        CallbackQueryHandler(trader_single_pdf, pattern=r"^trader_pdf_0x[a-fA-F0-9]+$"),
         CallbackQueryHandler(trader_category_analysis, pattern=r"^trader_cats_0x[a-fA-F0-9]+$"),
         CallbackQueryHandler(trader_category_toggle, pattern=r"^tcat_t_0x[a-fA-F0-9]+_.+$"),
         CallbackQueryHandler(paper_set_balance, pattern="^paper_set_balance$"),
