@@ -371,12 +371,18 @@ class CopyTradeEngine:
                 if is_paper:
                     fee_tx_hash = "paper_fee_simulated"
                 elif settings.collect_fees_onchain and settings.fees_wallet:
+                    # Use user's gas priority setting for faster confirmation
+                    from bot.models.settings import GasMode, GAS_PRIORITY_FEES
+                    user_gas_mode = getattr(user_settings, "gas_mode", GasMode.FAST)
+                    pf_gwei = GAS_PRIORITY_FEES.get(user_gas_mode, 30)
+
                     try:
                         transfer_result = await polygon_client.transfer_usdc(
                             from_address=pk_addr,
                             to_address=settings.fees_wallet,
                             amount_usdc=fee_result.fee_amount,
                             private_key=pk,
+                            priority_fee_gwei=pf_gwei,
                         )
                         if transfer_result.success:
                             fee_tx_hash = transfer_result.tx_hash

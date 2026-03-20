@@ -310,6 +310,7 @@ class PolygonClient:
         to_address: str,
         amount_usdc: float,
         private_key: str,
+        priority_fee_gwei: int = 30,
     ) -> TransferResult:
         """Transfer USDC on Polygon from one address to another.
 
@@ -337,6 +338,8 @@ class PolygonClient:
                 )
             amount_wei = usdc_to_wei(amount_usdc)
 
+            _pf_gwei = priority_fee_gwei  # capture for closure
+
             def _send_transfer():
                 nonce = w3.eth.get_transaction_count(from_addr)
                 tx = self._usdc_contract.functions.transfer(
@@ -347,7 +350,7 @@ class PolygonClient:
                         "nonce": nonce,
                         "gas": 100_000,
                         "maxFeePerGas": w3.eth.gas_price * 2,
-                        "maxPriorityFeePerGas": w3.to_wei(30, "gwei"),
+                        "maxPriorityFeePerGas": w3.to_wei(_pf_gwei, "gwei"),
                         "chainId": 137,  # Polygon mainnet
                     }
                 )

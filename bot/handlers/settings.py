@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 from bot.db.session import async_session
-from bot.models.settings import SizingMode
+from bot.models.settings import SizingMode, GasMode, GAS_MODE_LABELS, GAS_PRIORITY_FEES
 from bot.services.user_service import get_user_by_telegram_id, get_or_create_settings, update_setting
 
 logger = logging.getLogger(__name__)
@@ -284,6 +284,10 @@ def _build_main_menu(us, paper_trading: bool) -> tuple[str, list]:
     else:
         tp_line = "🎯 Take-profit : **Désactivé**\n"
 
+    # Gas mode display
+    gas_mode = getattr(us, "gas_mode", GasMode.FAST)
+    gas_label = GAS_MODE_LABELS.get(gas_mode, "🚀 Fast")
+
     text = (
         "⚙️ **PARAMÈTRES DE COPYTRADE**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -295,6 +299,7 @@ def _build_main_menu(us, paper_trading: bool) -> tuple[str, list]:
         f"📏 Bornes : **{us.min_trade_usdc:.2f}** — **{us.max_trade_usdc:.2f} USDC**\n"
         f"⏱️ Délai de copie : **{us.copy_delay_seconds}s**\n"
         f"🔔 Confirmation : **{'Oui' if us.manual_confirmation else 'Non'}**\n"
+        f"⛽ Gas : **{gas_label}**\n"
         f"🌉 Auto-bridge SOL : **{'Activé' if us.auto_bridge_sol else 'Désactivé'}**\n"
         f"📝 Paper Trading : **{'Oui (simulation)' if paper_trading else 'Non (réel)'}**\n"
     )
@@ -332,7 +337,10 @@ def _build_main_menu(us, paper_trading: bool) -> tuple[str, list]:
             InlineKeyboardButton("🔔 Confirmation", callback_data="set_manual_confirmation"),
         ],
         [
+            InlineKeyboardButton("⛽ Vitesse Gas", callback_data="set_gas_mode"),
             InlineKeyboardButton("🌉 Bridge SOL", callback_data="set_auto_bridge_sol"),
+        ],
+        [
             InlineKeyboardButton(
                 f"📝 Paper {'ON' if paper_trading else 'OFF'}",
                 callback_data="set_paper_trading",
@@ -522,6 +530,60 @@ async def setting_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         status = "désactivé" if current else "activé"
         await query.edit_message_text(
             f"✅ Take-profit **{status}**\n\n" + text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return MAIN_MENU
+
+    # ── Gas mode sub-menu ──
+    if field == "gas_mode":
+        async with async_session() as session:
+            user = await get_user_by_telegram_id(session, query.from_user.id)
+            us = await get_or_create_settings(session, user)
+
+        current_mode = getattr(us, "gas_mode", GasMode.FAST)
+        keyboard = []
+        for mode in GasMode:
+            label = GAS_MODE_LABELS[mode]
+            if mode == current_mode:
+                label = f"✅ {label}"
+            keyboard.append([InlineKeyboardButton(label, callback_data=f"set_gas_{mode.value}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data="set_back_main")])
+
+        await query.edit_message_text(
+            "⛽ **Vitesse du Gas (Priority Fee)**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Contrôle la vitesse de confirmation de vos transactions sur Polygon.\n\n"
+            "**Comment ça marche :**\n"
+            "Plus le priority fee est élevé, plus vos transactions sont "
+            "incluses rapidement dans un bloc. Cela coûte un peu plus de POL.\n\n"
+            f"**Mode actuel : {GAS_MODE_LABELS[current_mode]}**\n\n"
+            "💡 **Normal** = ~0.001 POL/tx\n"
+            "💡 **Instant** = ~0.005 POL/tx\n\n"
+            "La différence est minime (< $0.01), mais le gain de vitesse "
+            "peut être significatif pour le copytrading.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return MAIN_MENU
+
+    # Handle gas mode selection (set_gas_normal, set_gas_fast, etc.)
+    if field.startswith("gas_"):
+        gas_value = field.replace("gas_", "")
+        try:
+            new_mode = GasMode(gas_value)
+        except ValueError:
+            await query.edit_message_text("❌ Mode de gas invalide.")
+            return MAIN_MENU
+
+        async with async_session() as session:
+            user = await get_user_by_telegram_id(session, query.from_user.id)
+            us = await get_or_create_settings(session, user)
+            await update_setting(session, us, "gas_mode", new_mode)
+            await session.refresh(us)
+            text, keyboard = _build_main_menu(us, user.paper_trading)
+        await query.edit_message_text(
+            f"✅ Gas passé en **{GAS_MODE_LABELS[new_mode]}**\n\n" + text,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )

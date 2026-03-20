@@ -18,6 +18,30 @@ class SizingMode(str, enum.Enum):
     KELLY = "kelly"               # Kelly criterion (advanced)
 
 
+class GasMode(str, enum.Enum):
+    NORMAL = "normal"   # 30 gwei priority fee — standard, ~2s confirmation
+    FAST = "fast"       # 50 gwei priority fee — faster, ~1-1.5s confirmation
+    ULTRA = "ultra"     # 100 gwei priority fee — fastest, <1s confirmation
+    INSTANT = "instant" # 200 gwei priority fee — maximum speed, costs more POL
+
+
+# Priority fee in gwei for each gas mode
+GAS_PRIORITY_FEES = {
+    GasMode.NORMAL: 30,
+    GasMode.FAST: 50,
+    GasMode.ULTRA: 100,
+    GasMode.INSTANT: 200,
+}
+
+# Labels for UI display
+GAS_MODE_LABELS = {
+    GasMode.NORMAL: "🐢 Normal (30 gwei) — ~2s",
+    GasMode.FAST: "🚀 Fast (50 gwei) — ~1.5s",
+    GasMode.ULTRA: "⚡ Ultra (100 gwei) — <1s",
+    GasMode.INSTANT: "💎 Instant (200 gwei) — max speed",
+}
+
+
 class UserSettings(Base):
     __tablename__ = "user_settings"
 
@@ -62,6 +86,11 @@ class UserSettings(Base):
     # Per-trader category filters
     # Format: {"0xwallet": {"excluded_categories": ["Crypto/XRP", "Sports"]}, ...}
     trader_filters: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+
+    # Gas priority mode — controls how fast transactions confirm on Polygon
+    gas_mode: Mapped[GasMode] = mapped_column(
+        Enum(GasMode), default=GasMode.FAST
+    )
 
     # Monitor mode (master tracking)
     # Ces flags décrivent comment ce follower souhaite que les masters
