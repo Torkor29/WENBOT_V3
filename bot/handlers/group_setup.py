@@ -259,7 +259,8 @@ async def _auto_setup_topics(
         config.setup_complete = config.all_topics_created
         config.is_active = True
 
-        # Link to subscriber account
+        # Link to subscriber account + auto-switch notification mode to "group"
+        owner = None
         if promoter_telegram_id:
             owner = await get_user_by_telegram_id(session, promoter_telegram_id)
             if owner:
@@ -268,6 +269,18 @@ async def _auto_setup_topics(
                     "Group %s linked to user %d (tg=%d)",
                     group_id, owner.id, promoter_telegram_id,
                 )
+                # Auto-switch notification mode so all future alerts go to the group
+                if config.setup_complete:
+                    try:
+                        from bot.services.user_service import get_or_create_settings
+                        user_settings = await get_or_create_settings(session, owner)
+                        if hasattr(user_settings, "notification_mode"):
+                            user_settings.notification_mode = "group"
+                            logger.info(
+                                "User %d notification_mode set to 'group'", owner.id
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to update notification_mode: %s", e)
             else:
                 logger.warning(
                     "Promoter tg=%d not found in DB — group %s unlinked",
@@ -289,6 +302,30 @@ async def _auto_setup_topics(
             TopicRouter.evict_user(user_id_saved)
         except Exception:
             pass
+
+    # Send a DM to the owner explaining they can now use the group for everything
+    if promoter_telegram_id and owner and config.setup_complete:
+        try:
+            await bot.send_message(
+                chat_id=promoter_telegram_id,
+                text=(
+                    "✅ *Votre groupe est prêt !*\n\n"
+                    "Toutes vos notifications arrivent maintenant dans votre groupe.\n\n"
+                    "*Commandes disponibles depuis le groupe :*\n"
+                    "• `/start` ou `/menu` — Menu principal\n"
+                    "• `/positions` — Positions ouvertes\n"
+                    "• `/balance` — Solde wallet\n"
+                    "• `/pause` / `/resume` — Pause / Reprendre\n"
+                    "• `/settings` — Paramètres\n"
+                    "• `/analytics` — Analytics V3\n"
+                    "• `/mygroup` — Statut de ce groupe\n\n"
+                    "🔒 *Opérations sensibles (import de clé privée, retrait) "
+                    "restent en message privé.*"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.debug("Failed to DM owner group-ready message: %s", e)
 
     # Send welcome messages in each topic
     if created_topics.get("topic_admin_id"):

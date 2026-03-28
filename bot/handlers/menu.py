@@ -186,11 +186,17 @@ async def _send_main_menu(message, tg_user, text_override: str | None = None) ->
 
 async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    if query:
+        await query.answer()
+    tg_user = query.from_user if query else update.effective_user
 
     async with async_session() as session:
-        user = await get_user_by_telegram_id(session, query.from_user.id)
+        user = await get_user_by_telegram_id(session, tg_user.id)
         if not user:
+            if query:
+                await query.edit_message_text("❌ Compte non trouvé. /start pour vous inscrire.")
+            else:
+                await update.message.reply_text("❌ Compte non trouvé. /start pour vous inscrire.")
             return
 
         wallets = user.wallets or []
@@ -284,19 +290,26 @@ async def menu_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ])
 
-    await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    if query:
+        await query.edit_message_text(
+            text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.message.reply_text(
+            text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 
 # ── Positions ────────────────────────────────────────
 
 async def menu_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    if query:
+        await query.answer()
+    tg_user = query.from_user if query else update.effective_user
 
     async with async_session() as session:
-        user = await get_user_by_telegram_id(session, query.from_user.id)
+        user = await get_user_by_telegram_id(session, tg_user.id)
         if not user:
             return
 
@@ -327,9 +340,8 @@ async def menu_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             [InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_positions")],
             [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
         ]
-        await query.edit_message_text(
-            text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        _send = query.edit_message_text if query else update.message.reply_text
+        await _send(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     # Fetch current prices for PNL calculation
@@ -439,19 +451,20 @@ async def menu_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         [InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_positions")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
-    await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    _send = query.edit_message_text if query else update.message.reply_text
+    await _send(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ── History ──────────────────────────────────────────
 
 async def menu_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    if query:
+        await query.answer()
+    tg_user = query.from_user if query else update.effective_user
 
     async with async_session() as session:
-        user = await get_user_by_telegram_id(session, query.from_user.id)
+        user = await get_user_by_telegram_id(session, tg_user.id)
         if not user:
             return
 
@@ -517,9 +530,8 @@ async def menu_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         [InlineKeyboardButton("🔄 Rafraîchir", callback_data="menu_history")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
-    await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    _send = query.edit_message_text if query else update.message.reply_text
+    await _send(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ── Deposit (inline summary + link to /deposit) ─────
@@ -3682,8 +3694,18 @@ async def _menu_mygroup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await mygroup_command(update, context)
 
 
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/menu command — show main menu from anywhere (DM or group topic)."""
+    await _send_main_menu(update.message, update.effective_user)
+
+
 def get_menu_handlers() -> list:
     return [
+        CommandHandler("menu", menu_command),
+        # Direct commands — work from group topics and DM
+        CommandHandler("balance", menu_balance),
+        CommandHandler("positions", menu_positions),
+        CommandHandler("history", menu_history),
         CallbackQueryHandler(menu_balance, pattern="^menu_balance$"),
         CallbackQueryHandler(menu_positions, pattern="^menu_positions$"),
         CallbackQueryHandler(menu_deposit, pattern="^menu_deposit$"),

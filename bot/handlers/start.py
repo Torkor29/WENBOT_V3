@@ -24,9 +24,35 @@ WELCOME, WALLET_CHOICE, WALLET_ADDRESS, PRIVATE_KEY, CONFIRM = range(5)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entry point — /start."""
-    # Message d'accueil unique pour tout le monde (nouveaux et anciens),
-    # avec accès au menu principal via un bouton.
+    """Entry point — /start.
+
+    Behaviour differs by context:
+    - Group chat: show the main menu directly (user already registered → use group)
+    - Private DM: full welcome screen with onboarding flow
+    """
+    # ── Group context: show menu directly ──────────────────────────
+    if update.effective_chat and update.effective_chat.type != "private":
+        from bot.handlers.menu import _build_main_menu_content
+        tg_user = update.effective_user
+        async with async_session() as session:
+            user = await get_user_by_telegram_id(session, tg_user.id)
+            if not user:
+                bot_username = (await context.bot.get_me()).username or "WenPolymarketBot"
+                await update.message.reply_text(
+                    f"👋 Bienvenue ! Pour configurer votre compte, envoyez `/start` "
+                    f"en message privé à @{bot_username}.",
+                    parse_mode="Markdown",
+                )
+                return ConversationHandler.END
+            text, keyboard = _build_main_menu_content(tg_user, user)
+        await update.message.reply_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return ConversationHandler.END
+
+    # ── DM context: full welcome / onboarding ─────────────────────
     keyboard = [
         [InlineKeyboardButton("🏠 Accéder au menu principal", callback_data="onboard_menu_main")],
         [InlineKeyboardButton("ℹ️ En savoir plus", callback_data="onboard_info")],
