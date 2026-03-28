@@ -329,7 +329,9 @@ async def main() -> None:
 
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
+    await app.updater.start_polling(
+        allowed_updates=["message", "callback_query", "my_chat_member", "chat_member"],
+    )
     logger.info("Telegram bot polling started.")
 
     await monitor.start()
