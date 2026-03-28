@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # RPC dédié pour Polygon (Alchemy, QuickNode, Ankr, etc.)
     # Exemple : https://polygon-mainnet.g.alchemy.com/v2/VOTRE_CLE
     polygon_rpc_url: str = ""
+    # WSS endpoint pour Polygon (blockchain listener L2)
+    polygon_wss_url: str = ""
+    # Enable L2 blockchain listener (OrderFilled events)
+    enable_l2_blockchain: bool = False
 
     # Dashboard web
     dashboard_enabled: bool = True
