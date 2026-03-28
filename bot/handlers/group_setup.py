@@ -124,11 +124,25 @@ async def handle_bot_chat_member(
             "Bot promoted to admin in '%s' (%s) — starting auto-setup",
             chat.title, chat.id,
         )
-        await _auto_setup_topics(context.bot, chat.id, chat.title or "Group")
+        # The user who promoted the bot becomes the group owner
+        promoter_tg_id = member_update.from_user.id if member_update.from_user else None
+        await _auto_setup_topics(
+            context.bot, chat.id, chat.title or "Group",
+            promoter_telegram_id=promoter_tg_id,
+        )
 
 
-async def _auto_setup_topics(bot, group_id: int, group_title: str) -> None:
-    """Create the 5 forum topics and store their IDs in the database."""
+async def _auto_setup_topics(
+    bot,
+    group_id: int,
+    group_title: str,
+    promoter_telegram_id: int | None = None,
+) -> None:
+    """Create the 5 forum topics and store their IDs in the database.
+
+    promoter_telegram_id: Telegram ID of the user who promoted the bot.
+    Used to link the group to the correct subscriber account.
+    """
 
     # Check if group is a forum (has topics enabled)
     try:
@@ -223,6 +237,8 @@ async def _auto_setup_topics(bot, group_id: int, group_title: str) -> None:
     # Save to database
     async with async_session() as session:
         from sqlalchemy import select
+        from bot.services.user_service import get_user_by_telegram_id
+
         config = (
             await session.execute(
                 select(GroupConfig).where(GroupConfig.group_id == group_id)
@@ -243,12 +259,36 @@ async def _auto_setup_topics(bot, group_id: int, group_title: str) -> None:
         config.setup_complete = config.all_topics_created
         config.is_active = True
 
+        # Link to subscriber account
+        if promoter_telegram_id:
+            owner = await get_user_by_telegram_id(session, promoter_telegram_id)
+            if owner:
+                config.user_id = owner.id
+                logger.info(
+                    "Group %s linked to user %d (tg=%d)",
+                    group_id, owner.id, promoter_telegram_id,
+                )
+            else:
+                logger.warning(
+                    "Promoter tg=%d not found in DB — group %s unlinked",
+                    promoter_telegram_id, group_id,
+                )
+
         await session.commit()
 
+        user_id_saved = config.user_id
         logger.info(
-            "GroupConfig saved: group=%s topics=%s complete=%s",
-            group_id, config.topics_dict, config.setup_complete,
+            "GroupConfig saved: group=%s user_id=%s topics=%s complete=%s",
+            group_id, user_id_saved, config.topics_dict, config.setup_complete,
         )
+
+    # Evict stale per-user TopicRouter cache so next notification uses new config
+    if user_id_saved:
+        try:
+            from bot.services.topic_router import TopicRouter
+            TopicRouter.evict_user(user_id_saved)
+        except Exception:
+            pass
 
     # Send welcome messages in each topic
     if created_topics.get("topic_admin_id"):

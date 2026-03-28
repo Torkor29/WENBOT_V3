@@ -8,7 +8,7 @@ from telegram.ext import Application
 
 from bot.config import settings
 from bot.db.session import init_db
-from bot.handlers.start import get_start_handler
+from bot.handlers.start import get_start_handler, get_setup_group_handler
 from bot.handlers.settings import get_settings_handler
 from bot.handlers.balance import get_balance_handlers
 from bot.handlers.controls import get_control_handlers
@@ -19,6 +19,7 @@ from bot.handlers.menu import get_menu_handlers
 from bot.handlers.withdraw import get_withdraw_handler
 from bot.handlers.analytics import get_analytics_handlers
 from bot.handlers.group_setup import get_group_setup_handler
+from bot.handlers.mygroup import get_mygroup_handlers
 from bot.services.monitor import MultiMasterMonitor
 from bot.services.clob_ws_monitor import ClobWsMonitor, RawWsEvent
 from bot.services.copytrade import CopyTradeEngine
@@ -51,6 +52,7 @@ def build_application() -> Application:
     app = Application.builder().token(settings.telegram_token).build()
 
     app.add_handler(get_start_handler())
+    app.add_handler(get_setup_group_handler())  # setup_my_group from any screen
     app.add_handler(get_settings_handler())
     app.add_handler(get_bridge_handler())
     for handler in get_bridge_callbacks():
@@ -74,6 +76,10 @@ def build_application() -> Application:
 
     # V3 — Auto-setup: creates forum topics when bot is added as admin to a group
     app.add_handler(get_group_setup_handler())
+
+    # /mygroup — show / manage user's linked group
+    for handler in get_mygroup_handlers():
+        app.add_handler(handler)
 
     return app
 
@@ -131,17 +137,50 @@ def setup_scheduler(
     # Recalculate trader stats every 15 minutes
     if trader_tracker:
         async def refresh_all_trader_stats():
-            """Recalculate stats for all watched wallets."""
+            """Recalculate stats for all watched wallets.
+
+            On auto-pause, alert each subscriber who follows that trader
+            via their own group (multi-tenant).
+            """
             try:
+                from bot.db.session import async_session as _as
+                from bot.models.user import User
+                from bot.services.topic_router import TopicRouter
+                from bot.services.user_service import get_or_create_settings
+                from sqlalchemy import select
+
                 for wallet in monitor.watched_wallets:
                     await trader_tracker.recalculate_stats(wallet)
                     if await trader_tracker.check_auto_pause(wallet):
-                        if topic_router:
-                            short = f"{wallet[:6]}...{wallet[-4:]}"
-                            await topic_router.send_alert(
-                                f"⚠️ Trader `{short}` auto-paused: "
-                                f"win rate below threshold"
-                            )
+                        short = f"{wallet[:6]}...{wallet[-4:]}"
+                        alert_text = (
+                            f"⚠️ *Trader auto-pausé*\n\n"
+                            f"`{short}` a été mis en pause automatiquement "
+                            f"(win rate en dessous du seuil)."
+                        )
+                        # Alert each subscriber who follows this wallet
+                        try:
+                            async with _as() as session:
+                                users = (await session.execute(select(User).where(
+                                    User.is_active == True  # noqa: E712
+                                ))).scalars().all()
+                            for u in users:
+                                try:
+                                    us = None
+                                    async with _as() as s2:
+                                        us = await get_or_create_settings(s2, u)
+                                    if us and wallet in (us.followed_wallets or []):
+                                        ur = await TopicRouter.for_user(u.id, topic_router._bot)
+                                        eff = ur or topic_router
+                                        if eff:
+                                            await eff.send_alert(alert_text)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            # Fallback: send to global admin topic
+                            if topic_router:
+                                await topic_router.send_alert(alert_text)
+
                 logger.info(
                     "Trader stats refreshed for %d wallets",
                     len(monitor.watched_wallets),
@@ -169,12 +208,13 @@ def setup_scheduler(
             id="check_time_exits",
         )
 
-    # Daily portfolio report at 8:00 UTC
+    # Daily portfolio report at 8:00 UTC — sends to each user's own group
     if portfolio_manager and topic_router:
         async def daily_portfolio_report():
             try:
                 from bot.db.session import async_session
                 from bot.models.user import User
+                from bot.services.topic_router import TopicRouter
                 from sqlalchemy import select
 
                 async with async_session() as session:
@@ -186,7 +226,10 @@ def setup_scheduler(
 
                 for user in users:
                     report = await portfolio_manager.format_portfolio_report(user.id)
-                    await topic_router.send_portfolio(report)
+                    # Use user's own group router if available, else global
+                    user_router = await TopicRouter.for_user(user.id, topic_router._bot)
+                    effective = user_router or topic_router
+                    await effective.send_portfolio(report)
             except Exception as e:
                 logger.error("Daily portfolio report failed: %s", e)
 

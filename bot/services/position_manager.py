@@ -249,9 +249,16 @@ class PositionManager:
             shares=pos.shares,
         )
 
-        # Send alert to topic
-        if self._topic_router:
-            await self._topic_router.send_alert(alert_text)
+        # Send alert to the user's own group (multi-tenant), fallback to global
+        try:
+            from bot.services.topic_router import TopicRouter
+            bot = getattr(self._topic_router, "_bot", None)
+            user_router = await TopicRouter.for_user(pos.user_id, bot) if bot else None
+            effective_router = user_router or self._topic_router
+            if effective_router:
+                await effective_router.send_alert(alert_text)
+        except Exception as _e:
+            logger.warning("Failed to send position exit alert: %s", _e)
 
         # Execute the actual sell via callback
         if self._on_exit_callback:

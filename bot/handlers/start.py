@@ -227,6 +227,7 @@ async def onboard_create_wallet(
             "🔑 Exporter la clé privée (⚠️ sensible)",
             callback_data="export_pk",
         )],
+        [InlineKeyboardButton("📊 Créer mon groupe Telegram", callback_data="setup_my_group")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
     await query.edit_message_text(
@@ -243,8 +244,9 @@ async def onboard_create_wallet(
         "**60 secondes**.\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "**Prochaines étapes :**\n"
-        "1. « 💳 Déposer » — Alimenter le wallet en USDC\n"
-        "2. « ⚙️ Paramètres » — Choisir vos traders à copier",
+        "1. 📊 Créez votre groupe Telegram (recommandé)\n"
+        "2. « 💳 Déposer » — Alimenter le wallet en USDC\n"
+        "3. « ⚙️ Paramètres » — Choisir vos traders à copier",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -256,6 +258,19 @@ async def receive_private_key(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     """Receive private key — derive address, encrypt immediately, delete message."""
+    # SECURITY: Private key must NEVER be sent in a group chat
+    if update.effective_chat and update.effective_chat.type != "private":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        await update.effective_chat.send_message(
+            "🔒 *Sécurité* — Cette opération est réservée aux messages privés.\n\n"
+            "Ne partagez JAMAIS votre clé privée dans un groupe !",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
     private_key = update.message.text.strip()
     chat = update.effective_chat
 
@@ -360,6 +375,7 @@ async def onboard_confirm(
         await session.commit()
 
         keyboard = [
+            [InlineKeyboardButton("📊 Créer mon groupe Telegram", callback_data="setup_my_group")],
             [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
         ]
         await query.edit_message_text(
@@ -371,8 +387,9 @@ async def onboard_confirm(
             "pour signer vos trades automatiquement. Elle n'est jamais "
             "visible en clair.\n\n"
             "**Prochaines étapes :**\n"
-            "1. « 👛 Wallets » — Voir votre wallet et vos soldes\n"
-            "2. « ⚙️ Paramètres » — Choisir quels traders copier",
+            "1. 📊 Créez votre groupe Telegram (recommandé)\n"
+            "2. « 👛 Wallets » — Voir votre wallet et vos soldes\n"
+            "3. « ⚙️ Paramètres » — Choisir quels traders copier",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -381,6 +398,44 @@ async def onboard_confirm(
     context.user_data.pop("wallet_address", None)
     context.user_data.pop("private_key", None)
 
+    return ConversationHandler.END
+
+
+async def setup_my_group_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Show step-by-step instructions to create and link the user's Telegram group."""
+    query = update.callback_query
+    await query.answer()
+
+    bot_username = (await context.bot.get_me()).username or "WenPolymarketBot"
+
+    keyboard = [
+        [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+    ]
+    await query.edit_message_text(
+        "📊 **Créer votre groupe de trading**\n\n"
+        "Votre groupe Telegram personnel recevra toutes vos "
+        "notifications en temps réel, organisées en 5 topics :\n\n"
+        "📊 *Signals* — Chaque trade avec son score 0-100\n"
+        "👤 *Traders* — Analytics des traders suivis\n"
+        "💼 *Portfolio* — Vue portfolio + PNL\n"
+        "🚨 *Alerts* — SL/TP, avertissements\n"
+        "⚙️ *Admin* — Statut du bot\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "**Étapes :**\n\n"
+        "1️⃣ Créez un **nouveau groupe** Telegram\n"
+        "   → Telegram → ✏️ → Nouveau groupe\n\n"
+        "2️⃣ Activez les **Topics** dans le groupe\n"
+        "   → Modifier le groupe → Topics → ✅ Activer\n\n"
+        f"3️⃣ Ajoutez **@{bot_username}** comme **Administrateur**\n"
+        "   → Gérer le groupe → Administrateurs → Ajouter\n"
+        "   → Cochez **Gérer les topics**\n\n"
+        "✅ Le bot crée automatiquement les 5 topics et se configure !\n\n"
+        "_Vous pouvez ensuite utiliser toutes les commandes depuis votre groupe._",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
     return ConversationHandler.END
 
 
@@ -448,7 +503,15 @@ def get_start_handler() -> ConversationHandler:
         fallbacks=[
             CommandHandler("start", start_command),
             CallbackQueryHandler(onboard_menu_main, pattern="^onboard_menu_main$"),
+            # Allow group setup instructions from any state
+            CallbackQueryHandler(setup_my_group_callback, pattern="^setup_my_group$"),
         ],
         per_user=True,
         per_message=False,
     )
+
+
+def get_setup_group_handler():
+    """Standalone callback handler for setup_my_group button (reachable from any screen)."""
+    from telegram.ext import CallbackQueryHandler as _CBH
+    return _CBH(setup_my_group_callback, pattern="^setup_my_group$")

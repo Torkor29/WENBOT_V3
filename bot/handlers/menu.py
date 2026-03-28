@@ -104,6 +104,9 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
             InlineKeyboardButton("🔍 Scanner traders", callback_data="menu_scanner"),
             InlineKeyboardButton("📈 Analytics V3", callback_data="v3_analytics"),
         ],
+        [
+            InlineKeyboardButton("📊 Mon groupe", callback_data="menu_mygroup"),
+        ],
     ])
 
     # Stop / Resume Copy button — always visible
@@ -3670,6 +3673,15 @@ async def scan_follow_trader(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer(f"✅ {w_short} ajouté aux traders suivis !", show_alert=True)
 
 
+async def _menu_mygroup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delegate 'Mon groupe' menu button to the mygroup command handler."""
+    from bot.handlers.mygroup import mygroup_command
+    # Edit current message first to avoid double-reply
+    query = update.callback_query
+    await query.answer()
+    await mygroup_command(update, context)
+
+
 def get_menu_handlers() -> list:
     return [
         CallbackQueryHandler(menu_balance, pattern="^menu_balance$"),
@@ -3719,6 +3731,8 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(stop_copy, pattern="^stop_copy$"),
         CallbackQueryHandler(resume_copy, pattern="^resume_copy$"),
         CallbackQueryHandler(menu_back, pattern="^menu_back$"),
+        # Mon groupe — delegate to mygroup handler
+        CallbackQueryHandler(_menu_mygroup_cb, pattern="^menu_mygroup$"),
         # Fallback: "Accéder au menu principal" — envoie un NOUVEAU message
         # (le message /start est une photo, on ne peut pas l'éditer en texte)
         CallbackQueryHandler(onboard_to_main_menu, pattern="^onboard_menu_main$"),

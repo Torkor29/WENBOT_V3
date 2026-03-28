@@ -2,8 +2,15 @@
 
 Supports 5 topics: Signals, Traders, Portfolio, Alerts, Admin.
 
-Configuration priority:
-1. Database (GroupConfig) — auto-setup via group_setup handler
+Multi-tenant architecture:
+- Each subscriber can have their own Forum Group (linked via GroupConfig.user_id).
+- TopicRouter.for_user(user_id, bot) returns a per-user router loaded from DB.
+- A class-level LRU cache avoids repeated DB lookups.
+- The global instance (used in main.py) is Julie's admin router (env config or
+  first setup group found in DB).
+
+Configuration priority for the global instance:
+1. Database (GroupConfig without user_id / first row) — auto-setup
 2. Environment variables (.env) — manual config
 3. Disabled — DM-only fallback
 """
@@ -20,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 class TopicRouter:
     """Routes messages to Telegram Forum Group topics or DMs."""
+
+    # ── Class-level per-user cache ────────────────────────────────
+    # user_id → TopicRouter instance (populated lazily)
+    _user_cache: dict[int, Optional["TopicRouter"]] = {}
 
     def __init__(self, bot: Bot):
         self._bot = bot
@@ -64,10 +75,73 @@ class TopicRouter:
     def is_enabled(self) -> bool:
         return self._enabled
 
-    async def try_load_from_db(self) -> bool:
-        """Try to load group config from the database.
+    # ── Per-user factory ──────────────────────────────────────────
 
-        Called at startup and after auto-setup.
+    @classmethod
+    async def for_user(cls, user_id: int, bot: Bot) -> Optional["TopicRouter"]:
+        """Return a TopicRouter configured for a specific subscriber's group.
+
+        Loads GroupConfig from DB, caches the result.
+        Returns None if the user hasn't set up a group yet.
+        """
+        # Use sentinel None to remember "no group for this user" (avoids repeat DB hits)
+        if user_id in cls._user_cache:
+            return cls._user_cache[user_id]
+
+        try:
+            from bot.db.session import async_session
+            from bot.models.group_config import GroupConfig
+            from sqlalchemy import select
+
+            async with async_session() as session:
+                config = (
+                    await session.execute(
+                        select(GroupConfig).where(
+                            GroupConfig.user_id == user_id,
+                            GroupConfig.setup_complete == True,  # noqa: E712
+                            GroupConfig.is_active == True,  # noqa: E712
+                        )
+                    )
+                ).scalar_one_or_none()
+
+            if not config:
+                cls._user_cache[user_id] = None  # cache "no group" result
+                return None
+
+            router = cls._make_from_config(config, bot)
+            cls._user_cache[user_id] = router
+            logger.debug(
+                "TopicRouter loaded for user=%d group=%s",
+                user_id, config.group_id,
+            )
+            return router
+
+        except Exception as e:
+            logger.debug("TopicRouter.for_user failed for user=%d: %s", user_id, e)
+            return None
+
+    @classmethod
+    def evict_user(cls, user_id: int) -> None:
+        """Invalidate cached router for a user (call after group (re)setup)."""
+        cls._user_cache.pop(user_id, None)
+        logger.debug("TopicRouter cache evicted for user=%d", user_id)
+
+    @classmethod
+    def _make_from_config(cls, config, bot: Bot) -> "TopicRouter":
+        """Build a TopicRouter from a GroupConfig ORM row (no __init__ side-effects)."""
+        router = cls.__new__(cls)
+        router._bot = bot
+        router._group_id = config.group_id
+        router._topics = config.topics_dict
+        router._enabled = True
+        return router
+
+    # ── Global instance helpers ───────────────────────────────────
+
+    async def try_load_from_db(self) -> bool:
+        """Try to load the global group config from the database.
+
+        Called at startup and after auto-setup for the admin/global group.
         Returns True if config was loaded.
         """
         try:
@@ -76,6 +150,8 @@ class TopicRouter:
             from sqlalchemy import select
 
             async with async_session() as session:
+                # Prefer rows without a specific owner (global admin group),
+                # then fall back to any complete group.
                 config = (
                     await session.execute(
                         select(GroupConfig)
@@ -94,7 +170,7 @@ class TopicRouter:
                 self._enabled = True
 
                 logger.info(
-                    "TopicRouter loaded from DB: group=%s topics=%s",
+                    "TopicRouter (global) loaded from DB: group=%s topics=%s",
                     config.group_id,
                     {k: v for k, v in config.topics_dict.items() if v},
                 )
@@ -103,6 +179,8 @@ class TopicRouter:
         except Exception as e:
             logger.debug("TopicRouter DB load failed: %s", e)
             return False
+
+    # ── Internal send ─────────────────────────────────────────────
 
     async def _send_to_topic(
         self,

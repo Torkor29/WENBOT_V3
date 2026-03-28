@@ -1,9 +1,12 @@
-"""GroupConfig model — stores Telegram group + topic IDs for auto-setup."""
+"""GroupConfig model — stores Telegram group + topic IDs for auto-setup.
+
+Multi-tenant: each user can have their own group (user_id FK).
+"""
 
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Integer, String, Boolean, DateTime, BigInteger
+from sqlalchemy import Integer, String, Boolean, DateTime, BigInteger, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, utcnow
@@ -13,6 +16,14 @@ class GroupConfig(Base):
     __tablename__ = "group_config"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+
+    # Owner — the bot subscriber who linked this group (nullable for legacy rows)
+    user_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Telegram group info
     group_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)

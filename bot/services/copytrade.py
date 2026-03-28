@@ -226,20 +226,26 @@ class CopyTradeEngine:
                                 f"User {tg_id}: smart filter blocked — {reason}"
                             )
                             # Notify user that signal was filtered
-                            if self._topic_router:
-                                from bot.handlers.notifications import format_signal_blocked
-                                v3s = getattr(signal, "_v3_score", None)
-                                blocked_text = format_signal_blocked(
-                                    market_question=signal.market_question or signal.market_id[:20],
-                                    reason=reason,
-                                    score=v3s.total_score if v3s else 0,
-                                )
-                                notif_mode = getattr(user_settings, "notification_mode", "dm")
-                                await self._topic_router.notify_user(
+                            from bot.handlers.notifications import format_signal_blocked
+                            v3s = getattr(signal, "_v3_score", None)
+                            blocked_text = format_signal_blocked(
+                                market_question=signal.market_question or signal.market_id[:20],
+                                reason=reason,
+                                score=v3s.total_score if v3s else 0,
+                            )
+                            notif_mode = getattr(user_settings, "notification_mode", "dm")
+                            from bot.services.topic_router import TopicRouter as _TR
+                            eff_r = await _TR.for_user(user.id, self._bot) or self._topic_router
+                            if eff_r:
+                                await eff_r.notify_user(
                                     user_telegram_id=tg_id,
                                     text=blocked_text,
                                     notification_mode=notif_mode,
                                     topic="signals",
+                                )
+                            elif self._bot:
+                                await self._bot.send_message(
+                                    chat_id=tg_id, text=blocked_text, parse_mode="Markdown",
                                 )
                             return
                     except Exception as e:
@@ -271,10 +277,15 @@ class CopyTradeEngine:
                             logger.info(
                                 f"User {tg_id}: portfolio blocked — {reason}"
                             )
-                            if self._topic_router:
-                                await self._topic_router.send_alert(
-                                    f"⚠️ Trade blocked for user {tg_id}: {reason}"
-                                )
+                            try:
+                                from bot.services.topic_router import TopicRouter as _TR
+                                eff_r = await _TR.for_user(user.id, self._bot) or self._topic_router
+                                if eff_r:
+                                    await eff_r.send_alert(
+                                        f"⚠️ *Trade bloqué* — risque portfolio\n`{reason}`"
+                                    )
+                            except Exception:
+                                pass
                             return
                     except Exception as e:
                         logger.warning("Portfolio check error (allowing): %s", e)
@@ -626,9 +637,14 @@ class CopyTradeEngine:
                         market_question=signal.market_question or signal.outcome,
                         error_message=f"Erreur inattendue : {str(e)[:200]}",
                     )
-                    # V3: Route crash errors to Alerts topic
-                    if self._topic_router:
-                        await self._topic_router.notify_user(
+                    # Multi-tenant: use user's own group for crash alerts
+                    from bot.services.topic_router import TopicRouter as _TR
+                    effective_router = (
+                        await _TR.for_user(user.id, self._bot)
+                        if hasattr(user, "id") else None
+                    ) or self._topic_router
+                    if effective_router:
+                        await effective_router.notify_user(
                             user_telegram_id=tg_id,
                             text=text,
                             notification_mode="both",  # Crash = always DM + group
@@ -818,13 +834,16 @@ class CopyTradeEngine:
         try:
             import asyncio as _asyncio
 
-            # V3: Route via TopicRouter based on user preference
-            if self._topic_router:
-                async with async_session() as session:
-                    us = await get_or_create_settings(session, user)
-                    notif_mode = getattr(us, "notification_mode", "dm")
+            async with async_session() as session:
+                us = await get_or_create_settings(session, user)
+                notif_mode = getattr(us, "notification_mode", "dm")
 
-                await self._topic_router.notify_user(
+            # Multi-tenant: prefer user's own group, fall back to global router
+            from bot.services.topic_router import TopicRouter as _TR
+            effective_router = await _TR.for_user(user.id, self._bot) or self._topic_router
+
+            if effective_router:
+                await effective_router.notify_user(
                     user_telegram_id=user.telegram_id,
                     text=text,
                     notification_mode=notif_mode,
@@ -890,13 +909,16 @@ class CopyTradeEngine:
         )
 
         try:
-            # V3: Route to Alerts topic
-            if self._topic_router:
-                async with async_session() as session:
-                    us = await get_or_create_settings(session, user)
-                    notif_mode = getattr(us, "notification_mode", "dm")
+            async with async_session() as session:
+                us = await get_or_create_settings(session, user)
+                notif_mode = getattr(us, "notification_mode", "dm")
 
-                await self._topic_router.notify_user(
+            # Multi-tenant: prefer user's own group, fall back to global router
+            from bot.services.topic_router import TopicRouter as _TR
+            effective_router = await _TR.for_user(user.id, self._bot) or self._topic_router
+
+            if effective_router:
+                await effective_router.notify_user(
                     user_telegram_id=user.telegram_id,
                     text=text,
                     notification_mode=notif_mode,
