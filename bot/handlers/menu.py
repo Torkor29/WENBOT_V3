@@ -1180,10 +1180,14 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
+    from bot.utils.formatting import (
+        header, fmt_usd, fmt_pnl, badge_trader_status, badge_position_status,
+        short_wallet as sw, bar, SEP, SEP_LIGHT,
+    )
+
     lines = [
-        "📡 **DASHBOARD — TRADERS SUIVIS**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "_Performances réelles sur Polymarket._\n",
+        f"{header('DASHBOARD — TRADERS SUIVIS', '📡')}\n"
+        "_Performances réelles sur Polymarket_\n",
     ]
 
     total_positions = 0
@@ -1192,114 +1196,107 @@ async def menu_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     now_ts = int(time.time())
 
     for wallet in followed:
-        w_short = f"{wallet[:6]}...{wallet[-4:]}"
+        w_short = sw(wallet)
 
-        # Fetch positions + activity (latest 20 for display)
         positions = await polymarket_client.get_positions_by_address(wallet)
         activity = await polymarket_client.get_activity_by_address(
             wallet, limit=20, start=now_ts - 86400
         )
 
-        # Séparer positions ouvertes vs résolues
         open_pos = [p for p in positions if not p.redeemable]
         settled_pos = [p for p in positions if p.redeemable]
 
-        # Try to get profile stats (PNL total, 1W, 1D)
         profile = None
         try:
             profile = await polymarket_client.get_trader_profile(wallet)
         except Exception:
             pass
 
-        if profile and profile.pseudonym:
-            lines.append(f"👤 **{profile.pseudonym}** `{w_short}`")
-        else:
-            lines.append(f"👤 **Trader** `{w_short}`")
+        # Trader card header with badge
+        name = profile.pseudonym if (profile and profile.pseudonym) else "Trader"
+        # Compute badge from activity
+        tf_acts_24h = await polymarket_client.get_activity_paginated(
+            wallet, start=now_ts - 86400, max_trades=5000
+        )
+        trade_count_24h = len(tf_acts_24h) if tf_acts_24h else 0
+
+        lines.append(f"{'─' * 20}")
+        lines.append(f"👤 *{name}* `{w_short}`")
 
         if not positions and not activity:
-            lines.append("   _Aucune activité_\n")
+            lines.append("  _Aucune activité_\n")
             continue
 
-        # Show profile PNL if available
+        # PNL line (profile)
         if profile and profile.pnl_total != 0:
-            e_total = "📈" if profile.pnl_total >= 0 else "📉"
-            e_1w = "📈" if profile.pnl_1w >= 0 else "📉"
-            lines.append(
-                f"   💰 **PNL total : {profile.pnl_total:+,.0f}$** | "
-                f"{e_1w} 7j : {profile.pnl_1w:+,.0f}$ | "
-                f"24h : {profile.pnl_1d:+,.0f}$"
-            )
+            pnl_parts = [f"Total: *{fmt_usd(profile.pnl_total)}*"]
+            if profile.pnl_1w != 0:
+                pnl_parts.append(f"7j: {fmt_usd(profile.pnl_1w)}")
+            if profile.pnl_1d != 0:
+                pnl_parts.append(f"24h: {fmt_usd(profile.pnl_1d)}")
+            lines.append(f"  💰 {' | '.join(pnl_parts)}")
 
-        # ── Activity par timeframe (avec pagination pour vrais chiffres) ──
+        # Activity compact
         tf_parts = []
-        for label, secs in [("1h", 3600), ("24h", 86400)]:
-            start_ts = now_ts - secs
-            tf_acts = await polymarket_client.get_activity_paginated(
-                wallet, start=start_ts, max_trades=5000
-            )
-            if tf_acts:
-                vol = sum(a.usdc_size for a in tf_acts)
-                tf_parts.append(f"{label}:{len(tf_acts)}t/{vol:,.0f}$")
+        tf_acts_1h = await polymarket_client.get_activity_paginated(
+            wallet, start=now_ts - 3600, max_trades=5000
+        )
+        if tf_acts_1h:
+            vol_1h = sum(a.usdc_size for a in tf_acts_1h)
+            tf_parts.append(f"1h: {len(tf_acts_1h)}t/{fmt_usd(vol_1h)}")
+        if tf_acts_24h:
+            vol_24h = sum(a.usdc_size for a in tf_acts_24h)
+            tf_parts.append(f"24h: {len(tf_acts_24h)}t/{fmt_usd(vol_24h)}")
         if tf_parts:
-            lines.append(f"   📊 {' | '.join(tf_parts)}")
+            lines.append(f"  📊 {' | '.join(tf_parts)}")
 
-        # ── PNL calculé sur positions ouvertes uniquement ──
+        # Open PNL
         trader_unrealized = sum(p.cash_pnl for p in open_pos)
         trader_invested = sum(p.initial_value for p in open_pos)
-        trader_current = sum(p.current_value for p in open_pos)
         grand_unrealized += trader_unrealized
         grand_invested += trader_invested
         total_positions += len(open_pos)
 
         if open_pos:
             pnl_pct = (trader_unrealized / trader_invested * 100) if trader_invested > 0 else 0
-            e = "📈" if trader_unrealized >= 0 else "📉"
+            pnl_bar = bar(max(0, 50 + pnl_pct / 2), 100, 8)
             lines.append(
-                f"   {e} **PNL ouvert : {trader_unrealized:+.2f}$ ({pnl_pct:+.1f}%)** "
-                f"sur {len(open_pos)} pos"
+                f"  {pnl_bar} {fmt_pnl(trader_unrealized, pnl_pct)} | {len(open_pos)} pos"
             )
         else:
-            lines.append("   _Pas de position ouverte_")
+            lines.append("  _Pas de position ouverte_")
 
-        # ── Top positions ouvertes ──
+        # Top 3 positions (compact)
         if open_pos:
             open_pos.sort(key=lambda p: abs(p.cash_pnl), reverse=True)
-            for p in open_pos[:5]:
-                e = "📈" if p.cash_pnl >= 0 else "📉"
-                title = p.title[:28] + "…" if len(p.title) > 28 else p.title
+            for p in open_pos[:3]:
+                badge = badge_position_status(p.pnl_pct)
+                title = p.title[:25] + "…" if len(p.title) > 25 else p.title
                 lines.append(
-                    f"   {e} **{p.outcome}** {p.avg_price:.2f}→{p.current_price:.2f} "
-                    f"({p.pnl_pct:+.0f}%) {p.cash_pnl:+.0f}$"
+                    f"  {badge} {p.outcome} {p.avg_price:.2f}→{p.current_price:.2f} "
+                    f"*{p.pnl_pct:+.0f}%* ({p.cash_pnl:+.0f}$)"
                 )
-                lines.append(f"      _{title}_")
-            if len(open_pos) > 5:
-                lines.append(f"   _… +{len(open_pos) - 5} autres_")
+            if len(open_pos) > 3:
+                lines.append(f"  _+{len(open_pos) - 3} autres_")
 
-        # ── Derniers trades ──
+        # Last 2 trades (very compact)
         if activity:
-            lines.append("   ─ Derniers trades ─")
-            for a in activity[:3]:
+            for a in activity[:2]:
                 side_e = "🟢" if a.side == "BUY" else "🔴"
-                title = a.title[:25] + "…" if len(a.title) > 25 else a.title
+                title = a.title[:22] + "…" if len(a.title) > 22 else a.title
                 lines.append(
-                    f"   {side_e} {a.side} **{a.outcome}** "
-                    f"{a.usdc_size:.1f}$ @ {a.price:.2f}"
+                    f"  {side_e} {a.outcome} {fmt_usd(a.usdc_size)} @ {a.price:.2f} _{title}_"
                 )
-                lines.append(f"      _{title}_")
 
         lines.append("")
 
-    # ── Totaux ──
-    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    # Totaux
+    lines.append(SEP)
     pnl_pct = (grand_unrealized / grand_invested * 100) if grand_invested > 0 else 0
-    e = "📈" if grand_unrealized >= 0 else "📉"
     lines.append(
-        f"{e} **P&L positions ouvertes : {grand_unrealized:+.2f}$ ({pnl_pct:+.1f}%)**\n"
-        f"💰 Investi : {grand_invested:.0f}$ • "
-        f"{total_positions} pos ouvertes sur {len(followed)} trader(s)"
-    )
-    lines.append(
-        "\n_📋 Récap = vos trades copiés par le bot_"
+        f"{fmt_pnl(grand_unrealized, pnl_pct)} | "
+        f"{fmt_usd(grand_invested)} investi | "
+        f"{total_positions} pos / {len(followed)} traders"
     )
 
     text = "\n".join(lines)
@@ -1424,25 +1421,38 @@ async def _menu_recap_impl(query) -> None:
 
     global_wr = f"{(wins / closed) * 100:.0f}%" if closed > 0 else "N/A"
 
+    from bot.utils.formatting import (
+        header, fmt_usd, fmt_pnl, bar_bicolor, bar,
+        short_wallet as sw, SEP, SEP_LIGHT,
+    )
+
     mode_label = "📝 PAPER" if is_paper else "💵 LIVE"
+    wr_pct = (wins / closed * 100) if closed > 0 else 0
+
     lines = [
-        f"📋 **RÉCAP — MES TRADES COPIÉS** ({mode_label})\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "_Ce que le bot a exécuté pour vous._\n",
-        f"📅 Aujourd'hui : **{len(trades_today)}** trades • **{vol_today:.2f}** USDC",
-        f"📆 Cette semaine : **{len(trades_week)}** trades • **{vol_week:.2f}** USDC",
-        f"📊 Win rate : **{global_wr}** ({wins}/{closed} résolus)",
-        f"📈 P&L réalisé : **{total_pnl:+.2f} USDC**" if closed > 0 else "",
-        f"📉 P&L ouvert : **{unrealized_pnl:+.2f} USDC**" if open_buys else "",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "**DÉTAIL PAR TRADER COPIÉ**\n",
+        f"{header('RÉCAP — MES COPIES', '📋')} {mode_label}\n",
     ]
-    # Remove empty lines from conditional entries
-    lines = [l for l in lines if l or l == ""]
+
+    # Global stats compact
+    if closed > 0:
+        wr_visual = bar_bicolor(wins, closed - wins, closed, 8)
+        lines.append(f"{wr_visual} *{wr_pct:.0f}%* WR ({wins}W/{closed - wins}L)")
+    lines.append(
+        f"📅 Jour: *{len(trades_today)}*t {fmt_usd(vol_today)} | "
+        f"📆 Sem: *{len(trades_week)}*t {fmt_usd(vol_week)}"
+    )
+    pnl_parts = []
+    if closed > 0:
+        pnl_parts.append(f"Réalisé: *{fmt_usd(total_pnl)}*")
+    if open_buys:
+        pnl_parts.append(f"Ouvert: *{fmt_usd(unrealized_pnl)}*")
+    if pnl_parts:
+        lines.append(f"💰 {' | '.join(pnl_parts)}")
+
+    lines.append(f"\n*── Par trader ──*")
 
     for wallet in followed:
-        w_short = f"{wallet[:6]}...{wallet[-4:]}"
+        w_short = sw(wallet)
         w_lower = wallet.lower()
 
         trader_trades = [
@@ -1453,41 +1463,37 @@ async def _menu_recap_impl(query) -> None:
         t_week = [t for t in trader_trades if t.created_at >= week_start]
         t_vol = sum(t.gross_amount_usdc for t in trader_trades)
 
-        # P&L par trader — utiliser settlement_pnl
         t_settled = [t for t in trader_trades if t.is_settled and t.settlement_pnl is not None]
         t_pnl = sum(t.settlement_pnl for t in t_settled)
         t_wins = sum(1 for t in t_settled if t.settlement_pnl > 0)
         t_closed = len(t_settled)
         t_wr = f"{(t_wins / t_closed) * 100:.0f}%" if t_closed > 0 else "—"
-        t_pnl_str = f"{t_pnl:+.2f}" if t_closed > 0 else "—"
 
-        lines.append(f"👤 `{w_short}`")
+        # Trader header with mini bar
+        if t_closed > 0:
+            t_bar = bar(t_wins / t_closed * 100, 100, 6)
+            pnl_sign = "+" if t_pnl >= 0 else ""
+            lines.append(
+                f"\n👤 `{w_short}` {t_bar} {t_wr} | *{pnl_sign}{fmt_usd(t_pnl)}*"
+            )
+        else:
+            lines.append(f"\n👤 `{w_short}` _pas de résolu_")
+
         lines.append(
-            f"   📅 Jour : {len(t_today)} • 📆 Sem : {len(t_week)} • "
-            f"Vol : {t_vol:.2f}"
+            f"  📅 {len(t_today)}t jour | {len(t_week)}t sem | {fmt_usd(t_vol)} vol"
         )
-        lines.append(f"   WR : {t_wr} • P&L : {t_pnl_str} USDC")
 
-        # Derniers trades (max 4)
-        for rt in trader_trades[:4]:
+        # Last 3 trades (compact)
+        for rt in trader_trades[:3]:
             side_emoji = "🟢" if rt.side == TradeSide.BUY else "🔴"
             q = rt.market_question or rt.market_id
-            if len(q) > 28:
-                q = q[:25] + "..."
+            if len(q) > 25:
+                q = q[:22] + "..."
             date_s = rt.created_at.strftime("%d/%m %H:%M")
-            settled = " ✅" if rt.is_settled else ""
-            pnl_s = f" ({rt.settlement_pnl:+.1f})" if rt.settlement_pnl else ""
-            lines.append(
-                f"   {side_emoji} {date_s} | "
-                f"{rt.net_amount_usdc:.2f} USDC{settled}{pnl_s}"
-            )
-            lines.append(f"      _{q}_")
-        lines.append("")
-
-    lines.append(
-        "_📡 Dashboard = performances réelles des traders_\n"
-        "_📋 Récap = ce que le bot a copié pour vous_"
-    )
+            pnl_s = ""
+            if rt.is_settled and rt.settlement_pnl is not None:
+                pnl_s = f" *{'+' if rt.settlement_pnl >= 0 else ''}{fmt_usd(rt.settlement_pnl)}*"
+            lines.append(f"  {side_emoji} {date_s} {fmt_usd(rt.net_amount_usdc)}{pnl_s} _{q}_")
 
     text = "\n".join(lines)
     if len(text) > 4000:

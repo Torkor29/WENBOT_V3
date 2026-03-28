@@ -1,4 +1,7 @@
-"""Admin panel handler — /admin command (admin only)."""
+"""Admin panel handler — /admin command (admin only).
+
+Refonte V3 : metrics enrichis, segmentation users, barres visuelles.
+"""
 
 import logging
 
@@ -20,36 +23,70 @@ def is_admin(telegram_id: int) -> bool:
         return False
 
 
+def _admin_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("👥 Followers", callback_data="admin_followers"),
+            InlineKeyboardButton("💰 Frais", callback_data="admin_fees"),
+        ],
+        [
+            InlineKeyboardButton("📊 Trades", callback_data="admin_trades"),
+            InlineKeyboardButton("🧠 V3 Stats", callback_data="admin_v3"),
+        ],
+        [InlineKeyboardButton("🔄 Rafraîchir", callback_data="admin_refresh")],
+    ])
+
+
+async def _build_admin_text(session) -> str:
+    """Build admin dashboard text with rich metrics."""
+    from bot.utils.formatting import header, fmt_usd, bar, SEP
+    from bot.models.user import User, UserRole
+    from sqlalchemy import select, func
+
+    stats = await get_admin_stats(session)
+
+    # User segmentation
+    all_users = (await session.execute(
+        select(User).where(User.role == UserRole.FOLLOWER)
+    )).scalars().all()
+
+    active = [u for u in all_users if u.is_active and not u.is_paused]
+    paused = [u for u in all_users if u.is_paused]
+    inactive = [u for u in all_users if not u.is_active]
+    live_users = [u for u in all_users if not u.paper_trading]
+    paper_users = [u for u in all_users if u.paper_trading]
+    total = len(all_users)
+
+    # Visual bars
+    active_pct = (len(active) / total * 100) if total > 0 else 0
+    live_pct = (len(live_users) / total * 100) if total > 0 else 0
+
+    return (
+        f"{header('PANEL ADMIN', '📊')}\n\n"
+        f"👥 *Users:* {total} total\n"
+        f"  🟢 Actifs: *{len(active)}* | 🟡 Pause: *{len(paused)}* | ⚫ Inactifs: *{len(inactive)}*\n"
+        f"  {bar(active_pct, 100, 10)} {active_pct:.0f}% actifs\n"
+        f"  💵 Live: *{len(live_users)}* | 📝 Paper: *{len(paper_users)}*\n"
+        f"  {bar(live_pct, 100, 10)} {live_pct:.0f}% en live\n\n"
+        f"📊 *Volume & Revenus:*\n"
+        f"  🔄 Trades (mois): *{stats['trade_count']}*\n"
+        f"  💰 Volume: *{fmt_usd(stats['total_volume'])}*\n"
+        f"  🏦 Frais (1%): *{fmt_usd(stats['total_fees'])}*\n\n"
+        f"💼 `{settings.fees_wallet}`"
+    )
+
+
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show admin dashboard."""
-    tg_user = update.effective_user
-
-    if not is_admin(tg_user.id):
-        await update.message.reply_text("🚫 Accès refusé — admin uniquement.")
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("🚫 Accès refusé.")
         return
 
     async with async_session() as session:
-        stats = await get_admin_stats(session)
+        text = await _build_admin_text(session)
 
     await update.message.reply_text(
-        "📊 **PANEL ADMIN**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 Followers actifs   : **{stats['follower_count']}**\n"
-        f"🔄 Trades ce mois     : **{stats['trade_count']}**\n"
-        f"💰 Volume total       : **{stats['total_volume']:.2f} USDC**\n"
-        f"🏦 Revenus frais (1%) : **{stats['total_fees']:.2f} USDC**\n\n"
-        f"💼 Fees Wallet : `{settings.fees_wallet}`",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("👥 Followers", callback_data="admin_followers"),
-                InlineKeyboardButton("💰 Détail frais", callback_data="admin_fees"),
-            ],
-            [
-                InlineKeyboardButton("📊 Trades récents", callback_data="admin_trades"),
-                InlineKeyboardButton("🔄 Rafraîchir", callback_data="admin_refresh"),
-            ],
-        ]),
+        text, parse_mode="Markdown", reply_markup=_admin_keyboard()
     )
 
 
@@ -65,25 +102,13 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if action == "refresh":
         async with async_session() as session:
-            stats = await get_admin_stats(session)
+            text = await _build_admin_text(session)
         await query.edit_message_text(
-            "📊 **PANEL ADMIN** (mis à jour)\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👥 Followers actifs   : **{stats['follower_count']}**\n"
-            f"🔄 Trades ce mois     : **{stats['trade_count']}**\n"
-            f"💰 Volume total       : **{stats['total_volume']:.2f} USDC**\n"
-            f"🏦 Revenus frais (1%) : **{stats['total_fees']:.2f} USDC**",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("👥 Followers", callback_data="admin_followers"),
-                    InlineKeyboardButton("💰 Détail frais", callback_data="admin_fees"),
-                ],
-                [InlineKeyboardButton("🔄 Rafraîchir", callback_data="admin_refresh")],
-            ]),
+            text, parse_mode="Markdown", reply_markup=_admin_keyboard()
         )
 
     elif action == "followers":
+        from bot.utils.formatting import short_wallet as sw
         from bot.models.user import User, UserRole
         from sqlalchemy import select
 
@@ -98,7 +123,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if not followers:
             await query.edit_message_text(
-                "👥 **Aucun follower inscrit.**",
+                "👥 *Aucun follower inscrit.*",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⬅️ Retour", callback_data="admin_refresh")],
@@ -106,12 +131,17 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
 
-        lines = ["👥 **FOLLOWERS**\n━━━━━━━━━━━━━━━━━━━━\n"]
+        from bot.utils.formatting import header, fmt_usd
+
+        lines = [f"{header('FOLLOWERS', '👥')}\n"]
         for f in followers:
-            status = "🟢" if f.is_active and not f.is_paused else "🟡" if f.is_paused else "🔴"
-            name = f.telegram_username or str(f.telegram_id)
-            mode = "📝" if f.paper_trading else "💵"
-            lines.append(f"{status} {name} {mode} | Limit: {f.daily_limit_usdc} USDC")
+            status = "🟢" if f.is_active and not f.is_paused else ("🟡" if f.is_paused else "🔴")
+            name = f"@{f.telegram_username}" if f.telegram_username else str(f.telegram_id)
+            mode = "💵" if not f.paper_trading else "📝"
+            vol = f.daily_spent_usdc or 0
+            lines.append(
+                f"{status} {mode} *{name}* | Jour: {fmt_usd(vol)}/{fmt_usd(f.daily_limit_usdc)}"
+            )
 
         await query.edit_message_text(
             "\n".join(lines),
@@ -122,6 +152,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif action == "fees":
+        from bot.utils.formatting import header, fmt_usd, bar
         from bot.models.fee import FeeRecord
         from sqlalchemy import select, func
 
@@ -129,31 +160,31 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             total = await session.scalar(
                 select(func.sum(FeeRecord.fee_amount))
             ) or 0.0
-
             confirmed = await session.scalar(
                 select(func.sum(FeeRecord.fee_amount)).where(
-                    FeeRecord.confirmed_on_chain == True
+                    FeeRecord.confirmed_on_chain == True  # noqa
                 )
             ) or 0.0
-
             paper = await session.scalar(
                 select(func.sum(FeeRecord.fee_amount)).where(
-                    FeeRecord.is_paper == True
+                    FeeRecord.is_paper == True  # noqa
                 )
             ) or 0.0
-
             count = await session.scalar(
                 select(func.count(FeeRecord.id))
             ) or 0
 
+        live_fees = total - paper
+        live_pct = (live_fees / total * 100) if total > 0 else 0
+
         await query.edit_message_text(
-            "💰 **DÉTAIL DES FRAIS**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📊 Nombre de prélèvements : **{count}**\n"
-            f"💵 Total frais             : **{total:.2f} USDC**\n"
-            f"✅ Confirmés on-chain      : **{confirmed:.2f} USDC**\n"
-            f"📝 Paper (simulés)         : **{paper:.2f} USDC**\n\n"
-            f"💼 Wallet frais : `{settings.fees_wallet}`",
+            f"{header('DÉTAIL FRAIS', '💰')}\n\n"
+            f"📊 *{count}* prélèvements | Total: *{fmt_usd(total)}*\n\n"
+            f"💵 Live (on-chain): *{fmt_usd(live_fees)}* ({live_pct:.0f}%)\n"
+            f"  ✅ Confirmés: *{fmt_usd(confirmed)}*\n"
+            f"📝 Paper (simulés): *{fmt_usd(paper)}*\n"
+            f"  {bar(live_pct, 100, 10)} {live_pct:.0f}% live\n\n"
+            f"💼 `{settings.fees_wallet}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Retour", callback_data="admin_refresh")],
@@ -161,6 +192,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     elif action == "trades":
+        from bot.utils.formatting import header, fmt_usd
         from bot.models.trade import Trade
         from sqlalchemy import select
 
@@ -172,7 +204,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if not trades:
             await query.edit_message_text(
-                "📊 **Aucun trade récent.**",
+                f"{header('TRADES RÉCENTS', '📊')}\n\nAucun trade.",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("⬅️ Retour", callback_data="admin_refresh")],
@@ -180,17 +212,89 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
 
-        lines = ["📊 **TRADES RÉCENTS**\n━━━━━━━━━━━━━━━━━━━━\n"]
+        lines = [f"{header('TRADES RÉCENTS', '📊')}\n"]
         for t in trades:
             date = t.created_at.strftime("%d/%m %H:%M") if t.created_at else "?"
+            mode = "📝" if t.is_paper else "💵"
+            side = "🟢" if t.side.value == "buy" else "🔴"
+            status_map = {"filled": "✅", "failed": "❌", "cancelled": "🚫", "pending": "🟡", "executing": "🔄"}
+            st = status_map.get(t.status.value, "❓")
             lines.append(
-                f"{'📝' if t.is_paper else '💵'} {date} | "
-                f"{t.side.value.upper()} | {t.gross_amount_usdc:.2f} → "
-                f"{t.net_amount_usdc:.2f} USDC | {t.status.value}"
+                f"{mode}{side} {date} | {fmt_usd(t.net_amount_usdc)} | {st} {t.status.value}"
             )
 
         await query.edit_message_text(
             "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Retour", callback_data="admin_refresh")],
+            ]),
+        )
+
+    elif action == "v3":
+        from bot.utils.formatting import header, bar
+        from bot.models.signal_score import SignalScore
+        from bot.models.active_position import ActivePosition
+        from bot.models.trader_stats import TraderStats
+        from sqlalchemy import select, func
+
+        async with async_session() as session:
+            # Signal stats
+            total_signals = await session.scalar(
+                select(func.count(SignalScore.id))
+            ) or 0
+            avg_score = await session.scalar(
+                select(func.avg(SignalScore.total_score))
+            ) or 0
+            passed = await session.scalar(
+                select(func.count(SignalScore.id)).where(SignalScore.passed == True)  # noqa
+            ) or 0
+
+            # Active positions
+            open_positions = await session.scalar(
+                select(func.count(ActivePosition.id)).where(
+                    ActivePosition.is_closed == False  # noqa
+                )
+            ) or 0
+            closed_sl = await session.scalar(
+                select(func.count(ActivePosition.id)).where(
+                    ActivePosition.close_reason == "sl_hit"
+                )
+            ) or 0
+            closed_tp = await session.scalar(
+                select(func.count(ActivePosition.id)).where(
+                    ActivePosition.close_reason == "tp_hit"
+                )
+            ) or 0
+
+            # Tracked traders
+            tracked = await session.scalar(
+                select(func.count(func.distinct(TraderStats.wallet)))
+            ) or 0
+            hot = await session.scalar(
+                select(func.count(TraderStats.id)).where(
+                    TraderStats.is_hot == True, TraderStats.period == "7d"  # noqa
+                )
+            ) or 0
+            cold = await session.scalar(
+                select(func.count(TraderStats.id)).where(
+                    TraderStats.is_cold == True, TraderStats.period == "7d"  # noqa
+                )
+            ) or 0
+
+        block_rate = ((total_signals - passed) / total_signals * 100) if total_signals > 0 else 0
+
+        await query.edit_message_text(
+            f"{header('V3 SMART ANALYSIS', '🧠')}\n\n"
+            f"*Scoring:*\n"
+            f"  📊 {total_signals} signaux analysés\n"
+            f"  🎯 Score moyen: *{avg_score:.0f}/100*\n"
+            f"  {bar(100 - block_rate, 100, 10)} {100 - block_rate:.0f}% acceptés / {block_rate:.0f}% bloqués\n\n"
+            f"*Positions actives:*\n"
+            f"  📦 {open_positions} ouvertes\n"
+            f"  🔴 {closed_sl} SL déclenchés | 🟢 {closed_tp} TP atteints\n\n"
+            f"*Traders trackés:*\n"
+            f"  👤 {tracked} traders | 🔥 {hot} hot | 🥶 {cold} cold",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Retour", callback_data="admin_refresh")],
