@@ -3,7 +3,7 @@
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CallbackQueryHandler, ContextTypes
+from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 from sqlalchemy import select, func, desc
 
 from bot.config import settings
