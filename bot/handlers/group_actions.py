@@ -149,7 +149,7 @@ _MENU_TO_PRESET: dict[str, str] = {
     "set_v3_positions":      "_positions_submenu",   # sous-menu dédié
     "set_v3_smart":          "_smart_submenu",
     "set_v3_portfolio":      "_portfolio_submenu",
-    "set_scoring_criteria_menu": "_smart_submenu",
+    # set_scoring_criteria_menu → handled by _scoring_group_interceptor
 }
 
 
@@ -745,9 +745,57 @@ def get_group_action_handlers() -> list:
         # 4. Annulation d'un picker
         CallbackQueryHandler(group_cancel_picker, pattern=r"^grp_cancel_picker$"),
 
-        # 5. Saisie libre dans le groupe (MessageHandler — texte en attente)
+        # 5. Scoring menus (profiles, criteria, weights)
+        CallbackQueryHandler(_scoring_group_interceptor, pattern=r"^sc_"),
+        CallbackQueryHandler(_scoring_group_interceptor, pattern=r"^set_scoring_criteria_menu$"),
+
+        # 6. Saisie libre dans le groupe (MessageHandler — texte en attente)
         MessageHandler(
             filters.TEXT & filters.ChatType.GROUPS & ~filters.COMMAND,
             group_free_input,
         ),
     ]
+
+
+async def _scoring_group_interceptor(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Intercepte les callbacks sc_* en contexte groupe et les route
+    vers les handlers de topic_menus, puis stoppe la propagation."""
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        return  # laisser passer au handler DM
+
+    from bot.handlers.topic_menus import (
+        show_scoring_profiles,
+        apply_scoring_profile,
+        show_scoring_criteria_list,
+        show_criterion_detail,
+        toggle_criterion,
+        set_criterion_weight,
+        scoring_back_to_signals,
+    )
+
+    data = (update.callback_query.data or "").strip()
+
+    try:
+        if data == "sc_profiles":
+            await show_scoring_profiles(update, context)
+        elif data.startswith("sc_apply:"):
+            await apply_scoring_profile(update, context)
+        elif data in ("sc_criteria", "set_scoring_criteria_menu"):
+            await show_scoring_criteria_list(update, context)
+        elif data.startswith("sc_detail:"):
+            await show_criterion_detail(update, context)
+        elif data.startswith("sc_toggle:"):
+            await toggle_criterion(update, context)
+        elif data.startswith("sc_weight:"):
+            await set_criterion_weight(update, context)
+        elif data == "sc_back":
+            await scoring_back_to_signals(update, context)
+        else:
+            return  # unknown sc_ callback, let it pass
+    except Exception as e:
+        logger.warning("scoring interceptor error (data=%s): %s", data, e, exc_info=True)
+
+    raise ApplicationHandlerStop

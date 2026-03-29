@@ -270,6 +270,220 @@ async def _auto_repair_topic_id(
 
 
 # ─────────────────────────────────────────────
+# Scoring profiles + criteria definitions
+# ─────────────────────────────────────────────
+
+SCORING_PROFILES = {
+    "prudent": {
+        "label": "🛡️ Prudent",
+        "short": "Sécurité maximale",
+        "description": (
+            "Score ≥ 65 — poids forts sur liquidité et forme trader.\n"
+            "Moins de trades, mais de meilleure qualité."
+        ),
+        "min_signal_score": 65,
+        "scoring_enabled": True,
+        "criteria": {
+            "spread": {"on": True, "w": 20},
+            "liquidity": {"on": True, "w": 20},
+            "conviction": {"on": True, "w": 15},
+            "trader_form": {"on": True, "w": 25},
+            "timing": {"on": True, "w": 10},
+            "consensus": {"on": True, "w": 10},
+        },
+    },
+    "equilibre": {
+        "label": "⚖️ Équilibré",
+        "short": "Bon compromis (recommandé)",
+        "description": (
+            "Score ≥ 40 — tous les critères activés, poids équilibrés.\n"
+            "Le meilleur compromis quantité / qualité."
+        ),
+        "min_signal_score": 40,
+        "scoring_enabled": True,
+        "criteria": {
+            "spread": {"on": True, "w": 15},
+            "liquidity": {"on": True, "w": 15},
+            "conviction": {"on": True, "w": 20},
+            "trader_form": {"on": True, "w": 20},
+            "timing": {"on": True, "w": 15},
+            "consensus": {"on": True, "w": 15},
+        },
+    },
+    "agressif": {
+        "label": "⚡ Agressif",
+        "short": "Plus de trades, plus de risques",
+        "description": (
+            "Score ≥ 20 — focus conviction + forme trader.\n"
+            "Ignore spread et timing. Plus de trades copiés."
+        ),
+        "min_signal_score": 20,
+        "scoring_enabled": True,
+        "criteria": {
+            "spread": {"on": False, "w": 0},
+            "liquidity": {"on": True, "w": 10},
+            "conviction": {"on": True, "w": 35},
+            "trader_form": {"on": True, "w": 35},
+            "timing": {"on": False, "w": 0},
+            "consensus": {"on": True, "w": 20},
+        },
+    },
+    "yolo": {
+        "label": "🎲 Tout passe",
+        "short": "Copie tout sans filtre",
+        "description": (
+            "Scoring désactivé — tous les signaux sont copiés.\n"
+            "⚠️ Risqué — uniquement en paper trading."
+        ),
+        "min_signal_score": 0,
+        "scoring_enabled": False,
+        "criteria": None,
+    },
+}
+
+CRITERIA_INFO = {
+    "spread": {
+        "emoji": "📏",
+        "name": "Spread",
+        "short": "Écart achat/vente",
+        "description": (
+            "Le spread mesure l'écart entre le prix d'achat\n"
+            "et de vente sur le marché Polymarket.\n\n"
+            "Un spread serré (< 1%) = marché actif, bon prix.\n"
+            "Un gros spread (> 5%) = vous payez cher pour entrer."
+        ),
+        "thresholds": (
+            "🟢 < 1% → 100 pts\n"
+            "🟡 1-2% → 80 pts\n"
+            "🟠 2-3% → 60 pts\n"
+            "🔴 > 5% → 0 pts"
+        ),
+    },
+    "liquidity": {
+        "emoji": "💧",
+        "name": "Liquidité",
+        "short": "Volume du marché (24h)",
+        "description": (
+            "Le volume échangé sur 24h indique si le marché\n"
+            "est actif.\n\n"
+            "Volume élevé = facile d'acheter/vendre sans\n"
+            "impact sur le prix. Volume faible = risque de\n"
+            "slippage important."
+        ),
+        "thresholds": (
+            "🟢 > $500K → 100 pts\n"
+            "🟡 > $100K → 80 pts\n"
+            "🟠 > $50K → 60 pts\n"
+            "🔴 < $10K → 10 pts"
+        ),
+    },
+    "conviction": {
+        "emoji": "💪",
+        "name": "Conviction",
+        "short": "Taille de mise du trader",
+        "description": (
+            "Mesure combien le trader mise par rapport à\n"
+            "son portfolio total.\n\n"
+            "10% du capital = forte conviction, il y croit.\n"
+            "< 2% = petit pari sans importance, signal faible."
+        ),
+        "thresholds": (
+            "🟢 > 10% du portfolio → 100 pts\n"
+            "🟡 > 5% → 80 pts\n"
+            "🟠 > 2% → 60 pts\n"
+            "🔴 < 2% → 20 pts"
+        ),
+    },
+    "trader_form": {
+        "emoji": "📈",
+        "name": "Forme du trader",
+        "short": "Win rate sur 7 jours",
+        "description": (
+            "Performances récentes du trader sur 7 jours.\n\n"
+            "Un trader à 70%+ est en forme, ses signaux\n"
+            "sont fiables. En dessous de 40%, il traverse\n"
+            "une mauvaise passe — prudence."
+        ),
+        "thresholds": (
+            "🟢 > 70% WR → 100 pts\n"
+            "🟡 > 60% → 80 pts\n"
+            "🟠 > 50% → 60 pts\n"
+            "🔴 < 40% → 0 pts"
+        ),
+    },
+    "timing": {
+        "emoji": "⏱️",
+        "name": "Timing",
+        "short": "Distance à l'expiry",
+        "description": (
+            "Quand le marché Polymarket expire-t-il ?\n\n"
+            "Sweet spot = 2h à 48h : assez proche pour que\n"
+            "le prix bouge, assez loin pour sortir si besoin.\n"
+            "Trop lointain = capital bloqué longtemps."
+        ),
+        "thresholds": (
+            "🟢 2h-48h → 100 pts (zone idéale)\n"
+            "🟡 2j-1 sem → 80 pts\n"
+            "🟠 1 sem-1 mois → 60 pts\n"
+            "🔴 > 3 mois → 20 pts"
+        ),
+    },
+    "consensus": {
+        "emoji": "👥",
+        "name": "Consensus",
+        "short": "Autres traders sur ce marché",
+        "description": (
+            "Vérifie si d'autres traders que vous suivez\n"
+            "ont aussi misé sur ce marché.\n\n"
+            "3+ traders = signal de consensus fort.\n"
+            "1 seul trader = moins de certitude."
+        ),
+        "thresholds": (
+            "🟢 3+ traders → 100 pts\n"
+            "🟡 2 traders → 70 pts\n"
+            "🟠 1 trader → 40 pts\n"
+            "🔴 0 autre → 20 pts"
+        ),
+    },
+}
+
+CRITERIA_ORDER = ["spread", "liquidity", "conviction", "trader_form", "timing", "consensus"]
+WEIGHT_OPTIONS = [5, 10, 15, 20, 25, 30, 35, 40]
+
+from bot.services.signal_scorer import DEFAULT_CRITERIA
+
+
+def _detect_active_profile(us) -> str:
+    """Detect which profile matches the user's current settings."""
+    criteria = getattr(us, "scoring_criteria", None)
+    min_score = float(getattr(us, "min_signal_score", 40.0))
+    scoring_on = bool(getattr(us, "signal_scoring_enabled", True))
+
+    if not scoring_on:
+        return "yolo"
+
+    for key, profile in SCORING_PROFILES.items():
+        if key == "yolo":
+            continue
+        if abs(min_score - profile["min_signal_score"]) > 0.1:
+            continue
+        if criteria == profile["criteria"]:
+            return key
+        if criteria is None and key == "equilibre":
+            return key
+
+    return "custom"
+
+
+def _get_user_criteria(us) -> dict:
+    """Get user's criteria config, falling back to defaults."""
+    criteria = getattr(us, "scoring_criteria", None)
+    if criteria:
+        return criteria
+    return dict(DEFAULT_CRITERIA)
+
+
+# ─────────────────────────────────────────────
 # 📊 Signals topic
 # ─────────────────────────────────────────────
 
@@ -280,10 +494,13 @@ async def _show_signals_menu(update: Update, user: User, us) -> None:
 
     scoring_on = bool(getattr(us, "signal_scoring_enabled", True))
     smart_on   = bool(getattr(us, "smart_filter_enabled", True))
-    coin_skip  = bool(getattr(us, "skip_coin_flip", True))
     min_score  = float(getattr(us, "min_signal_score", 40.0))
-    min_conv   = float(getattr(us, "min_conviction_pct", 2.0))
-    max_drift  = float(getattr(us, "max_price_drift_pct", 5.0))
+    criteria   = _get_user_criteria(us)
+    profile    = _detect_active_profile(us)
+    profile_label = SCORING_PROFILES.get(profile, {}).get("label", "🔧 Personnalisé")
+
+    on  = "✅"
+    off = "❌"
 
     # Stats signaux récents
     total_signals = 0
@@ -305,45 +522,62 @@ async def _show_signals_menu(update: Update, user: User, us) -> None:
 
     block_rate = ((total_signals - passed_signals) / total_signals * 100) if total_signals > 0 else 0
     pass_rate  = 100 - block_rate
-    score_bar  = bar(min_score, 100, 12)
-
-    on  = "✅"
-    off = "❌"
 
     lines = [
         f"📊 *SIGNAUX & SCORING*\n{SEP}\n",
-        f"*Scoring intelligent :* {on if scoring_on else off}",
-        f"  Score minimum : *{min_score:.0f}/100*",
-        f"  {score_bar} seuil",
-        f"  Score moyen reçu : *{avg_score:.0f}/100*\n",
-        f"*Filtres actifs :*",
-        f"  Smart Filter : {on if smart_on else off}",
-        f"  Skip Coin-Flip : {on if coin_skip else off}",
-        f"  Conviction min : *{min_conv:.0f}%* du portfolio trader",
-        f"  Drift max autorisé : *{max_drift:.0f}%*\n",
+        f"*Profil actif :* {profile_label}",
+        f"*Scoring :* {on if scoring_on else off} | *Score min :* {min_score:.0f}/100\n",
     ]
 
+    # Show each criterion with status
+    lines.append("*── Comment le score est calculé ──*\n")
+    lines.append("_Chaque signal reçu est noté de 0 à 100_\n"
+                 "_sur ces critères avant d'être copié :_\n")
+
+    for key in CRITERIA_ORDER:
+        info = CRITERIA_INFO[key]
+        cfg = criteria.get(key, {"on": True, "w": 15})
+        is_on = cfg.get("on", True)
+        weight = cfg.get("w", 15)
+        status = on if is_on else off
+        lines.append(f"{info['emoji']} *{info['name']}* {status} ({weight}%)")
+        lines.append(f"  _{info['short']}_")
+
+    lines.append("")
+
+    # Filtres
+    coin_skip = bool(getattr(us, "skip_coin_flip", True))
+    min_conv  = float(getattr(us, "min_conviction_pct", 2.0))
+    lines += [
+        f"*── Filtres supplémentaires ──*\n",
+        f"Smart Filter : {on if smart_on else off}",
+        f"Skip Coin-Flip : {on if coin_skip else off}",
+        f"Conviction min : *{min_conv:.0f}%*",
+    ]
+
+    # Stats historique
     if total_signals > 0:
         accept_bar = bar(pass_rate, 100, 12)
         lines += [
-            f"*Historique :* {total_signals} signaux analysés",
-            f"  {accept_bar} *{pass_rate:.0f}%* acceptés / *{block_rate:.0f}%* bloqués\n",
+            f"\n*── Historique ──*\n",
+            f"{total_signals} signaux analysés (moy. *{avg_score:.0f}/100*)",
+            f"{accept_bar} *{pass_rate:.0f}%* acceptés / *{block_rate:.0f}%* bloqués",
         ]
 
     text = "\n".join(lines)
 
     keyboard = [
         [
+            InlineKeyboardButton(f"📋 Changer de profil", callback_data="sc_profiles"),
+            InlineKeyboardButton("🎯 Modifier les critères", callback_data="sc_criteria"),
+        ],
+        [
             InlineKeyboardButton(f"🎯 Score min : {min_score:.0f}", callback_data="set_min_signal_score"),
             InlineKeyboardButton(f"🧠 Scoring : {on if scoring_on else off}", callback_data="set_signal_scoring_enabled"),
         ],
         [
-            InlineKeyboardButton("📐 Critères de scoring", callback_data="set_scoring_criteria_menu"),
             InlineKeyboardButton(f"🔍 Smart Filter : {on if smart_on else off}", callback_data="set_smart_filter_enabled"),
-        ],
-        [
-            InlineKeyboardButton(f"🪙 Skip coin-flip : {on if coin_skip else off}", callback_data="set_skip_coin_flip"),
-            InlineKeyboardButton(f"📉 Conviction ≥ {min_conv:.0f}%", callback_data="set_min_conviction_pct"),
+            InlineKeyboardButton(f"🪙 Coin-flip : {on if coin_skip else off}", callback_data="set_skip_coin_flip"),
         ],
         [InlineKeyboardButton("📊 Mes positions ouvertes", callback_data="menu_positions")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
@@ -716,3 +950,301 @@ async def _show_admin_menu(update: Update, user: User, us) -> None:
     await update.effective_message.reply_text(
         text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+# ─────────────────────────────────────────────
+# Scoring sub-menus (profiles, criteria, detail)
+# ─────────────────────────────────────────────
+
+async def show_scoring_profiles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Affiche les profils de scoring prédéfinis."""
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        active = _detect_active_profile(us)
+
+    lines = [
+        f"📋 *PROFILS DE SCORING*\n{SEP}\n",
+        "_Choisissez un profil qui définit automatiquement_",
+        "_le score minimum et les poids de chaque critère._\n",
+    ]
+
+    for key, profile in SCORING_PROFILES.items():
+        marker = " ← *actif*" if key == active else ""
+        lines.append(f"*{profile['label']}* — {profile['short']}{marker}")
+        lines.append(f"  _{profile['description']}_\n")
+
+    if active == "custom":
+        lines.append("🔧 *Personnalisé* ← *actif*")
+        lines.append("  _Configuration manuelle des critères._\n")
+
+    text = "\n".join(lines)
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🛡️ Prudent", callback_data="sc_apply:prudent"),
+            InlineKeyboardButton("⚖️ Équilibré", callback_data="sc_apply:equilibre"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Agressif", callback_data="sc_apply:agressif"),
+            InlineKeyboardButton("🎲 Tout passe", callback_data="sc_apply:yolo"),
+        ],
+        [InlineKeyboardButton("⬅️ Retour aux signaux", callback_data="sc_back")],
+    ]
+
+    await query.edit_message_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def apply_scoring_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Applique un profil de scoring prédéfini."""
+    query = update.callback_query
+    profile_key = query.data.replace("sc_apply:", "")
+
+    profile = SCORING_PROFILES.get(profile_key)
+    if not profile:
+        await query.answer("❌ Profil inconnu", show_alert=True)
+        return
+
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+
+        us.min_signal_score = profile["min_signal_score"]
+        us.signal_scoring_enabled = profile["scoring_enabled"]
+        us.scoring_criteria = profile["criteria"]
+
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(us, "scoring_criteria")
+        await session.commit()
+
+    await query.answer(f"✅ Profil {profile['label']} activé", show_alert=False)
+
+    # Refresh profiles menu
+    await show_scoring_profiles(update, context)
+
+
+async def show_scoring_criteria_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Affiche la liste des critères de scoring avec toggle + poids."""
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        criteria = _get_user_criteria(us)
+
+    on = "✅"
+    off = "❌"
+
+    lines = [
+        f"🎯 *CRITÈRES DE SCORING*\n{SEP}\n",
+        "_Chaque signal est noté de 0 à 100 en combinant_",
+        "_ces critères. Activez/désactivez chacun et_",
+        "_ajustez son poids (importance relative)._\n",
+        "_Les poids sont redistribués automatiquement_",
+        "_pour que le total fasse toujours 100%._\n",
+    ]
+
+    for key in CRITERIA_ORDER:
+        info = CRITERIA_INFO[key]
+        cfg = criteria.get(key, {"on": True, "w": 15})
+        is_on = cfg.get("on", True)
+        weight = cfg.get("w", 15)
+        status = on if is_on else off
+        lines.append(f"{info['emoji']} *{info['name']}* {status} — Poids : *{weight}%*")
+        lines.append(f"  _{info['short']}_")
+
+    text = "\n".join(lines)
+
+    keyboard = []
+    for key in CRITERIA_ORDER:
+        info = CRITERIA_INFO[key]
+        cfg = criteria.get(key, {"on": True, "w": 15})
+        is_on = cfg.get("on", True)
+        weight = cfg.get("w", 15)
+        status = on if is_on else off
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{info['emoji']} {info['name']} {status} {weight}%",
+                callback_data=f"sc_detail:{key}",
+            ),
+        ])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Retour aux signaux", callback_data="sc_back")])
+
+    await query.edit_message_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_criterion_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Affiche le détail d'un critère avec explication + barème + réglages."""
+    query = update.callback_query
+    crit_key = query.data.replace("sc_detail:", "")
+
+    info = CRITERIA_INFO.get(crit_key)
+    if not info:
+        await query.answer("❌ Critère inconnu", show_alert=True)
+        return
+
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        criteria = _get_user_criteria(us)
+
+    cfg = criteria.get(crit_key, {"on": True, "w": 15})
+    is_on = cfg.get("on", True)
+    weight = cfg.get("w", 15)
+
+    on = "✅"
+    off = "❌"
+
+    lines = [
+        f"{info['emoji']} *{info['name'].upper()}*\n{SEP}\n",
+        f"_{info['short']}_\n",
+        f"{info['description']}\n",
+        f"*── Barème de notation ──*\n",
+        f"{info['thresholds']}\n",
+        f"*── Réglages actuels ──*\n",
+        f"État : {on if is_on else off} {'Activé' if is_on else 'Désactivé'}",
+        f"Poids : *{weight}%* de la note finale",
+    ]
+
+    text = "\n".join(lines)
+
+    toggle_label = "❌ Désactiver" if is_on else "✅ Activer"
+    keyboard = [
+        [InlineKeyboardButton(toggle_label, callback_data=f"sc_toggle:{crit_key}")],
+    ]
+
+    # Weight buttons
+    weight_buttons = []
+    for w in WEIGHT_OPTIONS:
+        label = f"{'✓ ' if w == weight else ''}{w}%"
+        weight_buttons.append(
+            InlineKeyboardButton(label, callback_data=f"sc_weight:{crit_key}:{w}")
+        )
+    keyboard.append(weight_buttons[:4])
+    keyboard.append(weight_buttons[4:])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Retour aux critères", callback_data="sc_criteria")])
+
+    await query.edit_message_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def toggle_criterion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle un critère ON/OFF dans scoring_criteria."""
+    query = update.callback_query
+    crit_key = query.data.replace("sc_toggle:", "")
+
+    if crit_key not in CRITERIA_INFO:
+        await query.answer("❌ Critère inconnu", show_alert=True)
+        return
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+
+        criteria = _get_user_criteria(us)
+        cfg = criteria.get(crit_key, {"on": True, "w": 15})
+        cfg["on"] = not cfg.get("on", True)
+        criteria[crit_key] = cfg
+
+        us.scoring_criteria = criteria
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(us, "scoring_criteria")
+        await session.commit()
+
+        new_on = cfg["on"]
+
+    name = CRITERIA_INFO[crit_key]["name"]
+    new_state = "activé" if new_on else "désactivé"
+    await query.answer(f"✅ {name} {new_state}", show_alert=False)
+
+    # Refresh criterion detail
+    query.data = f"sc_detail:{crit_key}"
+    await show_criterion_detail(update, context)
+
+
+async def set_criterion_weight(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Définit le poids d'un critère de scoring."""
+    query = update.callback_query
+    parts = query.data.replace("sc_weight:", "").split(":")
+    if len(parts) != 2:
+        await query.answer("❌ Format invalide", show_alert=True)
+        return
+
+    crit_key, weight_str = parts
+    if crit_key not in CRITERIA_INFO:
+        await query.answer("❌ Critère inconnu", show_alert=True)
+        return
+
+    try:
+        weight = int(weight_str)
+    except ValueError:
+        await query.answer("❌ Poids invalide", show_alert=True)
+        return
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+
+        criteria = _get_user_criteria(us)
+        cfg = criteria.get(crit_key, {"on": True, "w": 15})
+        cfg["w"] = weight
+        criteria[crit_key] = cfg
+
+        us.scoring_criteria = criteria
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(us, "scoring_criteria")
+        await session.commit()
+
+    name = CRITERIA_INFO[crit_key]["name"]
+    await query.answer(f"✅ {name} → {weight}%", show_alert=False)
+
+    # Refresh criterion detail
+    query.data = f"sc_detail:{crit_key}"
+    await show_criterion_detail(update, context)
+
+
+async def scoring_back_to_signals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Retour au menu Signaux du topic."""
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        await _show_signals_menu(update, user, us)

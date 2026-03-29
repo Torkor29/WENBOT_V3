@@ -3766,7 +3766,40 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(menu_back, pattern="^menu_back$"),
         # Mon groupe — delegate to mygroup handler
         CallbackQueryHandler(_menu_mygroup_cb, pattern="^menu_mygroup$"),
+        # Scoring menus (profiles, criteria, weights) — work in DM too
+        CallbackQueryHandler(_scoring_dm_router, pattern=r"^sc_"),
+        CallbackQueryHandler(_scoring_dm_router, pattern=r"^set_scoring_criteria_menu$"),
         # Fallback: "Accéder au menu principal" — envoie un NOUVEAU message
         # (le message /start est une photo, on ne peut pas l'éditer en texte)
         CallbackQueryHandler(onboard_to_main_menu, pattern="^onboard_menu_main$"),
     ]
+
+
+async def _scoring_dm_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route scoring callbacks in DM context."""
+    from bot.handlers.topic_menus import (
+        show_scoring_profiles,
+        apply_scoring_profile,
+        show_scoring_criteria_list,
+        show_criterion_detail,
+        toggle_criterion,
+        set_criterion_weight,
+        scoring_back_to_signals,
+    )
+
+    data = (update.callback_query.data or "").strip()
+
+    if data == "sc_profiles":
+        await show_scoring_profiles(update, context)
+    elif data.startswith("sc_apply:"):
+        await apply_scoring_profile(update, context)
+    elif data in ("sc_criteria", "set_scoring_criteria_menu"):
+        await show_scoring_criteria_list(update, context)
+    elif data.startswith("sc_detail:"):
+        await show_criterion_detail(update, context)
+    elif data.startswith("sc_toggle:"):
+        await toggle_criterion(update, context)
+    elif data.startswith("sc_weight:"):
+        await set_criterion_weight(update, context)
+    elif data == "sc_back":
+        await scoring_back_to_signals(update, context)
