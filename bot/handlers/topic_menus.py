@@ -50,7 +50,7 @@ async def detect_topic(user_id: int, group_id: int, thread_id: Optional[int]) ->
             )).scalar_one_or_none()
 
             if not config:
-                logger.debug("detect_topic: no config for group=%s", group_id)
+                logger.info("detect_topic: no config for group=%s", group_id)
                 return "general"
 
             mapping = {
@@ -61,14 +61,48 @@ async def detect_topic(user_id: int, group_id: int, thread_id: Optional[int]) ->
                 "admin":     config.topic_admin_id,
             }
 
-        logger.debug("detect_topic: group=%s thread=%s map=%s", group_id, thread_id, mapping)
+        logger.info(
+            "detect_topic: group=%s thread=%s map=%s",
+            group_id, thread_id, mapping,
+        )
 
         for name, tid in mapping.items():
             if tid is not None and tid == thread_id:
                 return name
 
+        # Thread ID not found in mapping — all topic IDs might be NULL
+        logger.warning(
+            "detect_topic: thread_id=%s not in mapping %s — topic IDs may be missing",
+            thread_id, mapping,
+        )
+
     except Exception as e:
-        logger.warning("detect_topic error: %s", e)
+        logger.warning("detect_topic error: %s", e, exc_info=True)
+
+    return "general"
+
+
+def _detect_topic_from_name(topic_name: str) -> str:
+    """Fallback: detect topic type from the forum topic name string.
+
+    Matches against known topic name patterns (with or without emoji prefix).
+    """
+    if not topic_name:
+        return "general"
+
+    name_lower = topic_name.lower().strip()
+
+    # Match with/without emoji prefix
+    if "signal" in name_lower:
+        return "signals"
+    if "trader" in name_lower:
+        return "traders"
+    if "portfolio" in name_lower:
+        return "portfolio"
+    if "alert" in name_lower:
+        return "alerts"
+    if "admin" in name_lower:
+        return "admin"
 
     return "general"
 
@@ -93,7 +127,22 @@ async def show_topic_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     thread_id = getattr(update.effective_message, "message_thread_id", None)
 
     topic = await detect_topic(0, group_id, thread_id)  # user_id unused now
-    logger.debug("show_topic_menu: topic=%s thread=%s group=%s", topic, thread_id, group_id)
+
+    # Fallback: if DB lookup returned "general" but we're in a named topic,
+    # detect from the topic name and auto-repair the DB for next time.
+    if topic == "general" and thread_id:
+        topic_name = await _get_topic_name_from_message(update, context)
+        if topic_name:
+            topic = _detect_topic_from_name(topic_name)
+            if topic != "general":
+                logger.info(
+                    "show_topic_menu: fallback detected topic=%s from name='%s' "
+                    "(thread=%s group=%s) — auto-repairing DB",
+                    topic, topic_name, thread_id, group_id,
+                )
+                await _auto_repair_topic_id(group_id, topic, thread_id, tg_user.id)
+
+    logger.info("show_topic_menu: topic=%s thread=%s group=%s", topic, thread_id, group_id)
 
     if topic == "general":
         return False  # let caller show default menu
@@ -124,6 +173,100 @@ async def show_topic_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.warning("show_topic_menu error (topic=%s): %s", topic, e, exc_info=True)
         return False
+
+
+# ─────────────────────────────────────────────
+# Helpers: topic name detection + auto-repair
+# ─────────────────────────────────────────────
+
+async def _get_topic_name_from_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> Optional[str]:
+    """Try to get the forum topic name from the message context.
+
+    Telegram messages in forum topics have reply_to_message pointing to
+    the topic creation service message (forum_topic_created).
+    """
+    msg = update.effective_message
+    if not msg:
+        return None
+
+    # Method 1: reply_to_message → forum_topic_created
+    reply = msg.reply_to_message
+    if reply and reply.forum_topic_created:
+        return reply.forum_topic_created.name
+
+    # Method 2: the message itself might be a forum_topic_created message
+    if msg.forum_topic_created:
+        return msg.forum_topic_created.name
+
+    # Method 3: try the Telegram API to get topic info
+    thread_id = getattr(msg, "message_thread_id", None)
+    if thread_id and context.bot:
+        try:
+            chat = update.effective_chat
+            # Get forum topic info by sending a dummy getForumTopicIconStickers
+            # Actually, let's try get_chat which returns forum topics
+            # But there's no direct API for single topic info.
+            # Fall back to checking the pinned message / topic name from chat
+            pass
+        except Exception:
+            pass
+
+    return None
+
+
+async def _auto_repair_topic_id(
+    group_id: int, topic_name: str, thread_id: int, telegram_user_id: int,
+) -> None:
+    """Auto-repair: save the thread_id for a detected topic in GroupConfig.
+
+    Creates the GroupConfig if it doesn't exist.
+    """
+    field_map = {
+        "signals":   "topic_signals_id",
+        "traders":   "topic_traders_id",
+        "portfolio": "topic_portfolio_id",
+        "alerts":    "topic_alerts_id",
+        "admin":     "topic_admin_id",
+    }
+    field = field_map.get(topic_name)
+    if not field:
+        return
+
+    try:
+        from sqlalchemy import select
+        async with async_session() as session:
+            config = (await session.execute(
+                select(GroupConfig).where(GroupConfig.group_id == group_id)
+            )).scalar_one_or_none()
+
+            if not config:
+                # Create a new GroupConfig for this group
+                from bot.services.user_service import get_user_by_telegram_id
+                user = await get_user_by_telegram_id(session, telegram_user_id)
+                config = GroupConfig(
+                    group_id=group_id,
+                    user_id=user.id if user else None,
+                    is_forum=True,
+                )
+                session.add(config)
+
+            # Only update if the field is NULL (don't overwrite valid IDs)
+            current_value = getattr(config, field, None)
+            if current_value is None:
+                setattr(config, field, thread_id)
+                logger.info(
+                    "auto_repair: set %s=%s for group=%s",
+                    field, thread_id, group_id,
+                )
+
+            # Check if all topics are now set
+            config.setup_complete = config.all_topics_created
+            await session.commit()
+
+    except Exception as e:
+        logger.warning("auto_repair_topic_id error: %s", e)
 
 
 # ─────────────────────────────────────────────
