@@ -131,84 +131,9 @@ async def show_topic_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ─────────────────────────────────────────────
 
 async def _show_signals_menu(update: Update, user: User, us) -> None:
-    """Écran du topic 📊 Signals — scoring, filtres, derniers signaux."""
-    from bot.models.signal_score import SignalScore
-    from sqlalchemy import select, func
-
-    scoring_on = bool(getattr(us, "signal_scoring_enabled", True))
-    smart_on   = bool(getattr(us, "smart_filter_enabled", True))
-    coin_skip  = bool(getattr(us, "skip_coin_flip", True))
-    min_score  = float(getattr(us, "min_signal_score", 40.0))
-    min_conv   = float(getattr(us, "min_conviction_pct", 2.0))
-    max_drift  = float(getattr(us, "max_price_drift_pct", 5.0))
-
-    # Stats signaux récents
-    total_signals = 0
-    passed_signals = 0
-    avg_score = 0.0
-    try:
-        async with async_session() as session:
-            total_signals = (await session.scalar(
-                select(func.count(SignalScore.id))
-            )) or 0
-            passed_signals = (await session.scalar(
-                select(func.count(SignalScore.id)).where(SignalScore.passed == True)  # noqa
-            )) or 0
-            avg_score = float((await session.scalar(
-                select(func.avg(SignalScore.total_score))
-            )) or 0)
-    except Exception:
-        pass
-
-    block_rate = ((total_signals - passed_signals) / total_signals * 100) if total_signals > 0 else 0
-    pass_rate  = 100 - block_rate
-    score_bar  = bar(min_score, 100, 12)
-
-    on  = "✅"
-    off = "❌"
-
-    lines = [
-        f"📊 *SIGNAUX & SCORING*\n{SEP}\n",
-        f"*Scoring intelligent :* {on if scoring_on else off}",
-        f"  Score minimum : *{min_score:.0f}/100*",
-        f"  {score_bar} seuil",
-        f"  Score moyen reçu : *{avg_score:.0f}/100*\n",
-        f"*Filtres actifs :*",
-        f"  Smart Filter : {on if smart_on else off}",
-        f"  Skip Coin-Flip : {on if coin_skip else off}",
-        f"  Conviction min : *{min_conv:.0f}%* du portfolio trader",
-        f"  Drift max autorisé : *{max_drift:.0f}%*\n",
-    ]
-
-    if total_signals > 0:
-        accept_bar = bar(pass_rate, 100, 12)
-        lines += [
-            f"*Historique :* {total_signals} signaux analysés",
-            f"  {accept_bar} *{pass_rate:.0f}%* acceptés / *{block_rate:.0f}%* bloqués\n",
-        ]
-
-    text = "\n".join(lines)
-
-    keyboard = [
-        [
-            InlineKeyboardButton(f"🎯 Score min : {min_score:.0f}", callback_data="set_min_signal_score"),
-            InlineKeyboardButton(f"🧠 Scoring : {on if scoring_on else off}", callback_data="set_signal_scoring_enabled"),
-        ],
-        [
-            InlineKeyboardButton("📐 Critères de scoring", callback_data="set_scoring_criteria_menu"),
-            InlineKeyboardButton(f"🔍 Smart Filter : {on if smart_on else off}", callback_data="set_smart_filter_enabled"),
-        ],
-        [
-            InlineKeyboardButton(f"🪙 Skip coin-flip : {on if coin_skip else off}", callback_data="set_skip_coin_flip"),
-            InlineKeyboardButton(f"📉 Conviction ≥ {min_conv:.0f}%", callback_data="set_min_conviction_pct"),
-        ],
-        [InlineKeyboardButton("📊 Mes positions ouvertes", callback_data="menu_positions")],
-        [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
-    ]
-
-    await update.effective_message.reply_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    """Délègue au module signals_menu dédié."""
+    from bot.handlers.signals_menu import show_signals_menu
+    await show_signals_menu(update, user, us)
 
 
 # ─────────────────────────────────────────────

@@ -21,6 +21,7 @@ from bot.handlers.analytics import get_analytics_handlers
 from bot.handlers.group_setup import get_group_setup_handler
 from bot.handlers.mygroup import get_mygroup_handlers
 from bot.handlers.group_actions import get_group_action_handlers
+from bot.handlers.signals_menu import get_signals_handlers
 from bot.services.monitor import MultiMasterMonitor
 from bot.services.clob_ws_monitor import ClobWsMonitor, RawWsEvent
 from bot.services.copytrade import CopyTradeEngine
@@ -81,6 +82,10 @@ def build_application() -> Application:
 
     # V3 — Analytics handlers (/analytics, trader stats, portfolio, etc.)
     for handler in get_analytics_handlers():
+        app.add_handler(handler)
+
+    # V3 — Signals topic menu (profiles, criteria, smart filter)
+    for handler in get_signals_handlers():
         app.add_handler(handler)
 
     # V3 — Auto-setup: creates forum topics when bot is added as admin to a group
