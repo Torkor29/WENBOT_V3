@@ -317,7 +317,7 @@ async def _auto_setup_topics(
                     "• `/balance` — Solde wallet\n"
                     "• `/pause` / `/resume` — Pause / Reprendre\n"
                     "• `/settings` — Paramètres\n"
-                    "• `/analytics` — Analytics V3\n"
+                    "• `/analytics` — Analytics\n"
                     "• `/mygroup` — Statut de ce groupe\n\n"
                     "🔒 *Opérations sensibles (import de clé privée, retrait) "
                     "restent en message privé.*"

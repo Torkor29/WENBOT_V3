@@ -60,7 +60,7 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
         pass
 
     text = (
-        f"**WENPOLYMARKET V3**\n"
+        f"**WENPOLYMARKET**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"Bonjour **{tg_user.first_name}** !\n\n"
         f"📬 {wallet_short} | {status} | {mode}\n"
@@ -102,7 +102,7 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
         ],
         [
             InlineKeyboardButton("🔍 Scanner traders", callback_data="menu_scanner"),
-            InlineKeyboardButton("📈 Analytics V3", callback_data="v3_analytics"),
+            InlineKeyboardButton("📈 Analytics", callback_data="v3_analytics"),
         ],
         [
             InlineKeyboardButton("📊 Mon groupe", callback_data="menu_mygroup"),
@@ -790,7 +790,7 @@ async def menu_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
     else:
         text = (
-            "❓ **GUIDE V3 — SMART ANALYSIS (3/3)**\n"
+            "❓ **GUIDE — SMART ANALYSIS (3/3)**\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "**🧠 Signal Scoring** (automatique)\n"
             "  Chaque signal reçoit un score 0-100 basé sur :\n"
@@ -2361,6 +2361,12 @@ async def onboard_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+
+    # In group context: show topic-specific menu instead of generic main menu
+    if update.effective_chat and update.effective_chat.type != "private":
+        from bot.handlers.topic_menus import show_topic_menu
+        if await show_topic_menu(update, context):
+            return
 
     tg_user = query.from_user
 

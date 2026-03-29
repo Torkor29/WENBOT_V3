@@ -32,7 +32,7 @@ async def cmd_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     text = (
-        "📈 **ANALYTICS V3**\n"
+        "📈 **ANALYTICS**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "_Votre tableau de bord d'intelligence trading._\n\n"
         "**👤 Traders** — Performance de chaque trader suivi\n"

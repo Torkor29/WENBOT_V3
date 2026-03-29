@@ -457,16 +457,21 @@ async def _show_alerts_menu(update: Update, user: User, us) -> None:
     keyboard = [
         [
             InlineKeyboardButton(f"🛑 Stop-Loss : {sl_pct:.0f}%", callback_data="set_stop_loss_menu"),
-            InlineKeyboardButton(f"🎯 Take-Profit : {'ON' if tp_on else 'OFF'}", callback_data="set_take_profit_menu"),
+            InlineKeyboardButton(f"🎯 Take-Profit : {tp_pct:.0f}%", callback_data="set_take_profit_menu"),
         ],
         [
-            InlineKeyboardButton(f"📉 Trailing : {'ON' if trail_on else 'OFF'}", callback_data="set_v3_positions"),
-            InlineKeyboardButton(f"⏰ Time Exit : {'ON' if time_on else 'OFF'}", callback_data="set_v3_positions"),
+            InlineKeyboardButton(f"📉 Trailing : {on if trail_on else off}", callback_data="set_trailing_stop_enabled"),
+            InlineKeyboardButton(f"📉 Trailing : {trail_pct:.0f}%", callback_data="set_trailing_stop_pct"),
         ],
         [
-            InlineKeyboardButton(f"📤 Scale-Out : {'ON' if scale_on else 'OFF'}", callback_data="set_v3_positions"),
-            InlineKeyboardButton("📊 Positions ouvertes", callback_data="menu_positions"),
+            InlineKeyboardButton(f"⏰ Time Exit : {on if time_on else off}", callback_data="set_time_exit_enabled"),
+            InlineKeyboardButton(f"⏰ Durée : {time_h}h", callback_data="set_time_exit_hours"),
         ],
+        [
+            InlineKeyboardButton(f"📤 Scale-Out : {on if scale_on else off}", callback_data="set_scale_out_enabled"),
+            InlineKeyboardButton(f"📤 Scale-Out : {scale_pct:.0f}%", callback_data="set_scale_out_pct"),
+        ],
+        [InlineKeyboardButton("📊 Positions ouvertes", callback_data="menu_positions")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
 
