@@ -1,19 +1,17 @@
 """Signals topic menu — V3 Multi-tenant.
 
-Menu complet du topic 📊 Signals :
-  • Profil actif (Prudent / Équilibré / Agressif / Tout passe / Personnalisé)
-  • 6 critères de scoring avec état, poids, explication, barème détaillé
-  • Smart Filter : filtres additionnels (conviction, coin-flip, drift…)
-  • Stats : signaux reçus, taux d'acceptation, score moyen
+Menu complet du topic 📊 Signals avec explications précises de chaque paramètre.
+Toutes les définitions sont tirées directement du code (signal_scorer.py, smart_filter.py).
 
 Callbacks gérés (pattern "^sig_"):
   sig_profile_menu            → liste des profils
   sig_set_profile:{key}       → appliquer un profil preset
-  sig_criteria_menu           → liste des 6 critères
-  sig_criterion:{name}        → fiche détaillée d'un critère
+  sig_criteria_menu           → liste des 6 critères de scoring
+  sig_criterion:{name}        → fiche complète d'un critère
   sig_toggle_crit:{name}      → activer / désactiver un critère
   sig_weight:{name}:{value}   → changer le poids d'un critère
   sig_smartfilter_menu        → panneau Smart Filter
+  sig_sf_detail:{filter}      → fiche complète d'un filtre Smart Filter
   sig_back                    → retour au menu principal Signals
 """
 
@@ -42,18 +40,18 @@ PROFILES: dict[str, dict] = {
             "Focus sur la liquidité et la forme récente du trader.\n"
             "Idéal pour préserver le capital."
         ),
-        "min_signal_score":      65,
+        "min_signal_score":       65,
         "signal_scoring_enabled": True,
-        "smart_filter_enabled":  True,
-        "skip_coin_flip":        True,
-        "min_conviction_pct":    3.0,
+        "smart_filter_enabled":   True,
+        "skip_coin_flip":         True,
+        "min_conviction_pct":     3.0,
         "scoring_criteria": {
-            "spread":      {"on": True,  "w": 20},
-            "liquidity":   {"on": True,  "w": 25},
-            "conviction":  {"on": True,  "w": 20},
-            "trader_form": {"on": True,  "w": 25},
-            "timing":      {"on": True,  "w": 5},
-            "consensus":   {"on": True,  "w": 5},
+            "spread":      {"on": True, "w": 20},
+            "liquidity":   {"on": True, "w": 25},
+            "conviction":  {"on": True, "w": 20},
+            "trader_form": {"on": True, "w": 25},
+            "timing":      {"on": True, "w": 5},
+            "consensus":   {"on": True, "w": 5},
         },
     },
     "balanced": {
@@ -62,25 +60,24 @@ PROFILES: dict[str, dict] = {
             "Configuration recommandée. Tous les critères actifs\n"
             "avec les poids par défaut. Bon équilibre volume/qualité."
         ),
-        "min_signal_score":      40,
+        "min_signal_score":       40,
         "signal_scoring_enabled": True,
-        "smart_filter_enabled":  True,
-        "skip_coin_flip":        True,
-        "min_conviction_pct":    2.0,
-        "scoring_criteria":      None,   # poids par défaut
+        "smart_filter_enabled":   True,
+        "skip_coin_flip":         True,
+        "min_conviction_pct":     2.0,
+        "scoring_criteria":       None,
     },
     "aggressive": {
         "label":       "⚡ Agressif",
         "description": (
             "Seuil bas, spread et timing ignorés.\n"
-            "Focus conviction + forme trader. Plus de trades,\n"
-            "plus de risque. Déconseillé en démarrage."
+            "Focus conviction + forme trader. Plus de trades, plus de risque."
         ),
-        "min_signal_score":      20,
+        "min_signal_score":       20,
         "signal_scoring_enabled": True,
-        "smart_filter_enabled":  False,
-        "skip_coin_flip":        False,
-        "min_conviction_pct":    1.0,
+        "smart_filter_enabled":   False,
+        "skip_coin_flip":         False,
+        "min_conviction_pct":     1.0,
         "scoring_criteria": {
             "spread":      {"on": False, "w": 0},
             "liquidity":   {"on": True,  "w": 15},
@@ -93,16 +90,15 @@ PROFILES: dict[str, dict] = {
     "all_pass": {
         "label":       "🎲 Tout passe",
         "description": (
-            "⚠️ Scoring désactivé — TOUS les signaux sont copiés\n"
-            "sans filtre. Recommandé uniquement en paper trading\n"
-            "pour observer le comportement brut des traders."
+            "⚠️ Scoring désactivé — TOUS les signaux sont copiés sans filtre.\n"
+            "Recommandé uniquement en paper trading pour observer le comportement brut."
         ),
-        "min_signal_score":      0,
+        "min_signal_score":       0,
         "signal_scoring_enabled": False,
-        "smart_filter_enabled":  False,
-        "skip_coin_flip":        False,
-        "min_conviction_pct":    0.0,
-        "scoring_criteria":      None,
+        "smart_filter_enabled":   False,
+        "skip_coin_flip":         False,
+        "min_conviction_pct":     0.0,
+        "scoring_criteria":       None,
     },
 }
 
@@ -115,146 +111,339 @@ DEFAULT_CRITERIA_CONFIG = {
     "consensus":   {"on": True, "w": 15},
 }
 
+CRITERIA_ORDER = ["spread", "liquidity", "conviction", "trader_form", "timing", "consensus"]
+
 
 # ═══════════════════════════════════════════════════════════════
-# FICHES DES 6 CRITÈRES — description complète + barème
+# FICHES PRÉCISES DES 6 CRITÈRES DE SCORING
+# Chaque définition vient directement du code signal_scorer.py
 # ═══════════════════════════════════════════════════════════════
 
 CRITERIA_INFO: dict[str, dict] = {
+
     "spread": {
-        "label":  "📏 Spread bid-ask",
-        "short":  "Écart entre prix achat et vente",
+        "label": "📏 Spread bid-ask",
+        "short": "Écart entre le meilleur prix d'achat et de vente",
         "what": (
-            "*C'est quoi ?*\n"
-            "L'écart entre le meilleur prix d'achat (bid) et le meilleur prix de vente (ask) "
-            "dans le carnet d'ordres au moment du signal.\n\n"
-            "*Pourquoi c'est important ?*\n"
-            "Un spread élevé signifie que tu perds immédiatement de l'argent à l'entrée. "
-            "Sur un marché à 0.50¢ avec un spread de 5%, tu as déjà -5% avant même que "
-            "le marché bouge. Un spread faible = marché liquide = meilleur prix d'exécution."
-        ),
-        "scale": (
-            "🟢 *< 1%* → 100 pts — excellent, très liquide\n"
-            "🟡 *1 - 2%* → 80 pts — bon, acceptable\n"
-            "🟠 *2 - 3%* → 60 pts — correct mais attention\n"
-            "🔴 *3 - 5%* → 30 pts — méfiance, marché peu liquide\n"
-            "⛔ *> 5%* → 0 pts — éviter, coût d'entrée trop élevé"
+            "*📏 SPREAD BID-ASK*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`spread% = (best_ask − best_bid) / best_ask × 100`\n\n"
+            "*Données sources :*\n"
+            "Carnet d'ordres CLOB Polymarket en temps réel au moment du signal.\n"
+            "`best_bid` = meilleur prix proposé par les acheteurs\n"
+            "`best_ask` = meilleur prix proposé par les vendeurs\n\n"
+            "*Pourquoi ça compte :*\n"
+            "Si le spread est de 5%, tu perds immédiatement 5% à l'entrée avant même "
+            "que le marché bouge. Exemple : YES cote $0.50 bid / $0.55 ask → tu achètes "
+            "à $0.55 pour quelque chose que tu pourrais revendre à $0.50 maintenant.\n\n"
+            "*Barème de scoring :*\n"
+            "🟢 `< 1%` → *100 pts* — marché très liquide, excellent\n"
+            "🟡 `1–2%` → *80 pts* — bon\n"
+            "🟠 `2–3%` → *60 pts* — acceptable\n"
+            "🔴 `3–5%` → *30 pts* — méfiance, coût élevé\n"
+            "⛔ `> 5%` → *0 pts* — éviter absolument"
         ),
         "default_w": 15,
         "weight_options": [5, 10, 15, 20, 25, 30],
     },
+
     "liquidity": {
-        "label":  "💧 Liquidité",
-        "short":  "Volume de transactions sur 24h",
+        "label": "💧 Liquidité",
+        "short": "Volume total échangé sur ce marché en 24h (USDC)",
         "what": (
-            "*C'est quoi ?*\n"
-            "Le volume total de USDC échangés sur ce marché durant les dernières 24h.\n\n"
-            "*Pourquoi c'est important ?*\n"
-            "Un marché peu liquide est difficile à sortir rapidement. Si tu veux vendre "
-            "et qu'il n'y a personne en face, tu es bloqué ou tu vends à un mauvais prix. "
-            "Un volume élevé garantit que tu peux entrer ET sortir facilement."
-        ),
-        "scale": (
-            "🟢 *≥ $500K* → 100 pts — très liquide, marché actif\n"
-            "🟡 *≥ $100K* → 80 pts — bon volume\n"
-            "🟠 *≥ $50K* → 60 pts — acceptable\n"
-            "🔴 *≥ $10K* → 40 pts — faible, risque de slippage\n"
-            "⛔ *< $10K* → 10 pts — éviter, très peu liquide"
+            "*💧 LIQUIDITÉ*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`score = f(intel.volume_24h)`\n\n"
+            "*Données sources :*\n"
+            "API Polymarket — volume total USDC échangé sur ce marché\n"
+            "durant les dernières 24 heures.\n\n"
+            "*Pourquoi ça compte :*\n"
+            "Un marché peu liquide = peu de contreparties disponibles.\n"
+            "Si tu veux vendre et qu'il n'y a personne en face, tu es bloqué "
+            "ou tu vends à un prix catastrophique. Un volume élevé garantit "
+            "que tu peux entrer ET sortir à tout moment.\n\n"
+            "*Barème de scoring :*\n"
+            "🟢 `≥ $500 000` → *100 pts* — très actif\n"
+            "🟡 `≥ $100 000` → *80 pts* — bon volume\n"
+            "🟠 `≥ $50 000` → *60 pts* — acceptable\n"
+            "🔴 `≥ $10 000` → *40 pts* — faible, risque de slippage\n"
+            "⛔ `< $10 000` → *10 pts* — très peu liquide, éviter"
         ),
         "default_w": 15,
         "weight_options": [5, 10, 15, 20, 25, 30],
     },
+
     "conviction": {
-        "label":  "💪 Conviction du trader",
-        "short":  "Taille du trade vs portfolio du master",
+        "label": "💪 Conviction du trader",
+        "short": "Poids du trade dans le portfolio total du master",
         "what": (
-            "*C'est quoi ?*\n"
-            "Le pourcentage que représente ce trade dans le portfolio total du trader qu'on copie.\n\n"
-            "*Pourquoi c'est important ?*\n"
-            "Si un trader met 15% de tout son argent sur un trade, c'est qu'il y croit vraiment. "
-            "Si il mise 0.1%, c'est peut-être un test ou une position anecdotique. "
-            "On veut copier les trades que le master prend au sérieux, pas ses paris à 1€."
-        ),
-        "scale": (
-            "🟢 *≥ 10%* → 100 pts — très haute conviction\n"
-            "🟡 *≥ 5%* → 80 pts — bonne conviction\n"
-            "🟠 *≥ 2%* → 60 pts — conviction modérée\n"
-            "⛔ *< 2%* → 20 pts — signal faible, trade anecdotique"
+            "*💪 CONVICTION DU TRADER*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`conviction% = (size × price) / portfolio_value × 100`\n\n"
+            "*Détail des variables :*\n"
+            "`size` = nombre de shares achetées par le master\n"
+            "`price` = prix d'achat du master (en USDC par share)\n"
+            "`size × price` = valeur totale USDC de ce trade\n"
+            "`portfolio_value` = somme de `currentValue` de toutes\n"
+            "les positions ouvertes du master sur Polymarket\n\n"
+            "*Exemple concret :*\n"
+            "Master a $10 000 de positions ouvertes.\n"
+            "Il achète 500 shares YES à $0.60 → trade = $300\n"
+            "Conviction = 300 / 10 000 = *3%* ✅\n\n"
+            "Si le même master achète 10 shares à $0.60 → $6\n"
+            "Conviction = 6 / 10 000 = *0.06%* ❌ signal anecdotique\n\n"
+            "*Barème de scoring :*\n"
+            "🟢 `≥ 10%` → *100 pts* — très haute conviction\n"
+            "🟡 `≥ 5%` → *80 pts* — bonne conviction\n"
+            "🟠 `≥ 2%` → *60 pts* — conviction modérée\n"
+            "⛔ `< 2%` → *20 pts* — trade anecdotique, signal faible"
         ),
         "default_w": 20,
         "weight_options": [10, 15, 20, 25, 30, 35, 40],
     },
+
     "trader_form": {
-        "label":  "📈 Forme du trader",
-        "short":  "Win rate sur les 7 derniers jours",
+        "label": "📈 Forme du trader",
+        "short": "Win rate du master sur les 7 derniers jours",
         "what": (
-            "*C'est quoi ?*\n"
-            "Le pourcentage de trades gagnants du master sur les 7 derniers jours, "
-            "ainsi que sa série en cours (victoires/défaites consécutives).\n\n"
-            "*Pourquoi c'est important ?*\n"
-            "Un trader à 70% sur la semaine est en pleine forme. Un trader à 30% traverse "
-            "une mauvaise passe — même s'il est globalement bon, ce n'est pas le moment de "
-            "le copier. Ce critère capture la dynamique récente, pas la performance historique."
-        ),
-        "scale": (
-            "🟢 *≥ 70%* → 100 pts — trader en feu 🔥\n"
-            "🟡 *≥ 60%* → 80 pts — bonne forme\n"
-            "🟠 *≥ 50%* → 60 pts — correct\n"
-            "🔴 *≥ 40%* → 30 pts — forme médiocre, méfiance\n"
-            "⛔ *< 40%* → 0 pts — trader en mauvaise passe"
+            "*📈 FORME DU TRADER*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`score = f(TraderStats.win_rate_7d)`\n\n"
+            "*Données sources :*\n"
+            "`TraderStats` table DB, période `7d`\n"
+            "Calculé à partir des trades réels du master sur Polymarket\n"
+            "(positions ouvertes + clôturées sur 7 jours glissants)\n\n"
+            "*Ce qui est mesuré :*\n"
+            "Win rate = % de trades gagnants sur les 7 derniers jours.\n"
+            "Minimum 3 trades requis pour que ce critère soit fiable.\n"
+            "Si < 3 trades sur 7j → score neutre de 50 pts par défaut.\n\n"
+            "La série en cours (streak) est affichée en info mais\n"
+            "n'influence pas directement le score.\n\n"
+            "*Barème de scoring :*\n"
+            "🟢 `≥ 70%` → *100 pts* — trader en feu 🔥\n"
+            "🟡 `≥ 60%` → *80 pts* — bonne forme\n"
+            "🟠 `≥ 50%` → *60 pts* — correct\n"
+            "🔴 `≥ 40%` → *30 pts* — forme médiocre\n"
+            "⛔ `< 40%` → *0 pts* — mauvaise passe, éviter"
         ),
         "default_w": 20,
         "weight_options": [10, 15, 20, 25, 30, 35, 40],
     },
+
     "timing": {
-        "label":  "⏱️ Timing",
-        "short":  "Temps restant avant expiration du marché",
+        "label": "⏱️ Timing",
+        "short": "Heures restantes avant expiration du marché",
         "what": (
-            "*C'est quoi ?*\n"
-            "Le nombre d'heures/jours restants avant que le marché se règle (YES ou NO).\n\n"
-            "*Pourquoi c'est important ?*\n"
-            "Trop court (< 30min) : le résultat est quasi certain, les cotes ne bougent plus "
-            "et le risque d'exécution est élevé. Trop long (> 3 mois) : ton capital est "
-            "immobilisé longtemps. La zone idéale est 2h-48h : assez de temps pour que le "
-            "trade évolue favorablement, pas assez pour bloquer le capital inutilement."
-        ),
-        "scale": (
-            "⛔ *Expiré* → 0 pts — trop tard\n"
-            "🔴 *< 30 min* → 20 pts — trop risqué, résultat quasi certain\n"
-            "🟠 *30 min - 2h* → 50 pts — court, acceptable\n"
-            "🟢 *2h - 48h* → 100 pts — zone idéale ✓\n"
-            "🟡 *2 - 7 jours* → 80 pts — bon, moyen terme\n"
-            "🟠 *7 - 30 jours* → 60 pts — long terme, OK\n"
-            "🔴 *30 - 90 jours* → 40 pts — capital bloqué longtemps\n"
-            "⛔ *> 90 jours* → 20 pts — trop lointain"
+            "*⏱️ TIMING*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`hours = (intel.expiry − now).total_seconds() / 3600`\n\n"
+            "*Données sources :*\n"
+            "Date d'expiration du marché via API Polymarket.\n"
+            "Calculé au moment exact où le signal est reçu.\n\n"
+            "*Pourquoi ça compte :*\n"
+            "• Trop court (< 30 min) : le résultat est quasi certain, "
+            "les cotes ne bougent plus, risque élevé de ne pas être exécuté.\n"
+            "• Zone idéale (2h–48h) : assez de temps pour que le trade "
+            "évolue, pas assez pour immobiliser le capital.\n"
+            "• Trop long (> 3 mois) : ton argent est bloqué des mois.\n\n"
+            "*Barème de scoring :*\n"
+            "⛔ Expiré → *0 pts*\n"
+            "🔴 `< 30 min` → *20 pts* — trop risqué\n"
+            "🟠 `30 min – 2h` → *50 pts* — court mais acceptable\n"
+            "🟢 `2h – 48h` → *100 pts* — zone idéale ✓\n"
+            "🟡 `2 – 7 jours` → *80 pts* — bon\n"
+            "🟠 `7 – 30 jours` → *60 pts* — long terme\n"
+            "🔴 `30 – 90 jours` → *40 pts* — capital bloqué longtemps\n"
+            "⛔ `> 90 jours` → *20 pts* — trop lointain"
         ),
         "default_w": 15,
         "weight_options": [5, 10, 15, 20, 25],
     },
+
     "consensus": {
-        "label":  "👥 Consensus",
-        "short":  "Combien de tes traders ont la même position",
+        "label": "👥 Consensus",
+        "short": "Nombre de tes autres traders sur ce même marché",
         "what": (
-            "*C'est quoi ?*\n"
-            "Le nombre de traders que tu suis qui ont déjà une position ouverte "
-            "sur ce même marché, dans le même sens.\n\n"
-            "*Pourquoi c'est important ?*\n"
-            "Si 3 traders indépendants misent tous sur YES pour le même événement, "
-            "c'est un signal bien plus fort qu'un seul trader isolé. Le consensus réduit "
-            "le risque d'erreur individuelle et indique une thèse partagée par plusieurs esprits."
-        ),
-        "scale": (
-            "🟢 *3 traders ou +* → 100 pts — fort consensus\n"
-            "🟡 *2 traders* → 70 pts — bon signal\n"
-            "🟠 *1 trader* → 40 pts — signal isolé\n"
-            "🔴 *0 autre trader* → 20 pts — aucun consensus"
+            "*👥 CONSENSUS*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`count = nb de wallets suivis ayant token_id dans leurs positions`\n\n"
+            "*Données sources :*\n"
+            "Snapshot des positions de chaque wallet suivi stocké dans\n"
+            "`MultiMasterMonitor._wallet_states`\n"
+            "Comparaison par `token_id` (identifiant unique du côté YES/NO)\n\n"
+            "*Ce qui est mesuré :*\n"
+            "Combien de tes traders suivis (hors le master émetteur du signal)\n"
+            "ont déjà une position ouverte sur le même token au moment du signal.\n\n"
+            "*Exemple :*\n"
+            "Tu suis 5 traders. Le signal vient de trader A.\n"
+            "Traders B et C ont déjà YES sur ce marché → consensus = *2* 🟡\n\n"
+            "⚠️ Consensus = 0 ne veut pas dire que c'est mauvais,\n"
+            "juste qu'aucun autre trader suivi n'est positionné.\n\n"
+            "*Barème de scoring :*\n"
+            "🟢 `3 traders ou +` → *100 pts* — fort consensus\n"
+            "🟡 `2 traders` → *70 pts* — bon signal\n"
+            "🟠 `1 trader` → *40 pts* — signal isolé\n"
+            "🔴 `0 autre trader` → *20 pts* — aucun consensus"
         ),
         "default_w": 15,
         "weight_options": [5, 10, 15, 20, 25, 30],
     },
 }
 
-CRITERIA_ORDER = ["spread", "liquidity", "conviction", "trader_form", "timing", "consensus"]
+
+# ═══════════════════════════════════════════════════════════════
+# FICHES PRÉCISES DES FILTRES SMART FILTER
+# Chaque définition vient directement du code smart_filter.py
+# ═══════════════════════════════════════════════════════════════
+
+SMART_FILTER_INFO: dict[str, dict] = {
+
+    "coin_flip": {
+        "label": "🪙 Skip Coin-Flip",
+        "setting": "skip_coin_flip",
+        "short": "Ignore les marchés où YES coûte entre $0.45 et $0.55",
+        "detail": (
+            "*🪙 SKIP COIN-FLIP*\n"
+            f"{SEP}\n\n"
+            "*Définition exacte :*\n"
+            "Un marché est considéré comme un 'coin-flip' si :\n"
+            "`0.45 ≤ signal.price ≤ 0.55`\n\n"
+            "C'est-à-dire que le prix du token YES est entre *$0.45 et $0.55*.\n\n"
+            "*Ce que ça signifie :*\n"
+            "Sur Polymarket, le prix d'un token YES représente la probabilité "
+            "implicite que l'événement arrive. Un prix de $0.50 = le marché "
+            "pense 50/50. Il n'y a *aucun edge* à copier un trade dans une situation "
+            "où personne ne sait ce qui va se passer.\n\n"
+            "*Exemple :*\n"
+            "Marché : 'BTC au-dessus de $95K à 17h ?'\n"
+            "Prix YES = $0.51 → coin-flip → *bloqué* ❌\n\n"
+            "Marché : 'Trump gagnera en 2028 ?'\n"
+            "Prix YES = $0.72 → pas un coin-flip → *autorisé* ✅\n\n"
+            "*Quand le désactiver ?*\n"
+            "Si tu veux copier même les marchés incertains (mode agressif)."
+        ),
+    },
+
+    "conviction": {
+        "label": "💪 Conviction minimum",
+        "setting": "min_conviction_pct",
+        "short": "% minimum du portfolio du trader que doit représenter le trade",
+        "detail": (
+            "*💪 CONVICTION MINIMUM (Smart Filter)*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`conviction = (signal.size × signal.price) / portfolio_value`\n"
+            "`bloqué si conviction < min_conviction_pct / 100`\n\n"
+            "*Variables :*\n"
+            "`signal.size` = nombre de shares du trade master\n"
+            "`signal.price` = prix de la share (USDC)\n"
+            "`portfolio_value` = somme de `currentValue` de toutes les\n"
+            "positions ouvertes du master récupérées via l'API Polymarket\n\n"
+            "*Note :* Ce filtre fait le même calcul que le critère de scoring\n"
+            "'Conviction' mais ici c'est un *filtre binaire* — en dessous du\n"
+            "seuil le trade est bloqué directement, avant même le scoring.\n\n"
+            "*Exemple avec seuil = 2% :*\n"
+            "Master a $5 000 de portfolio.\n"
+            "Trade de $80 → 80/5000 = 1.6% < 2% → *bloqué* ❌\n"
+            "Trade de $150 → 150/5000 = 3% ≥ 2% → *autorisé* ✅\n\n"
+            "*Valeurs recommandées :*\n"
+            "🛡️ Prudent : 3% | ⚖️ Équilibré : 2% | ⚡ Agressif : 1%"
+        ),
+    },
+
+    "drift": {
+        "label": "📏 Drift de prix maximum",
+        "setting": "max_price_drift_pct",
+        "short": "% max d'écart entre le prix du master et le prix actuel",
+        "detail": (
+            "*📏 DRIFT DE PRIX MAXIMUM*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`drift% = |current_price − signal.price| / signal.price × 100`\n"
+            "`bloqué si drift% > max_price_drift_pct`\n\n"
+            "*Variables :*\n"
+            "`signal.price` = prix auquel le master a acheté sa position\n"
+            "`current_price` = prix actuel sur le CLOB Polymarket\n"
+            "au moment où notre bot essaie de copier\n\n"
+            "*Pourquoi ça compte :*\n"
+            "Il y a toujours un délai entre le moment où le master achète\n"
+            "et le moment où notre bot copie (détection + réseau + tx).\n"
+            "Si le prix a déjà bougé de 8% depuis l'entrée du master,\n"
+            "tu arrives trop tard et tu achètes plus cher que lui.\n\n"
+            "*Exemple avec seuil = 5% :*\n"
+            "Master achète YES à $0.60.\n"
+            "Quand notre bot copie, YES vaut $0.63.\n"
+            "Drift = |0.63−0.60| / 0.60 × 100 = *5%* → limite atteinte ❌\n\n"
+            "YES vaut $0.61 → drift = 1.7% → *autorisé* ✅\n\n"
+            "*Valeurs recommandées :*\n"
+            "3-5% pour du temps réel | 8-10% si détection plus lente"
+        ),
+    },
+
+    "trader_edge": {
+        "label": "📊 Win rate par type de marché",
+        "setting": "min_trader_winrate_for_type",
+        "short": "WR minimum du trader sur la catégorie de ce marché",
+        "detail": (
+            "*📊 WIN RATE PAR TYPE DE MARCHÉ*\n"
+            f"{SEP}\n\n"
+            "*Formule exacte :*\n"
+            "`market_type = categorize(signal.market_question)`\n"
+            "`bloqué si history.win_rate < min_wr`\n"
+            "`(uniquement si history.trades_count ≥ min_trades)`\n\n"
+            "*Catégories détectées automatiquement :*\n"
+            "`crypto_btc_5min` `crypto_btc_hourly` `crypto_btc_daily`\n"
+            "`crypto_eth` `crypto_sol` `crypto_other`\n"
+            "`politics_us` `politics_intl`\n"
+            "`sports_nfl` `sports_nba` `sports_soccer` `sports_mlb`\n"
+            "`economy_macro` `economy_stocks`\n"
+            "`entertainment` `tech` `weather` `other`\n\n"
+            "*Logique :*\n"
+            "Un trader peut être excellent sur le BTC 5-min et nul sur la politique.\n"
+            "Ce filtre vérifie que le master a un edge *sur ce type précis de marché*.\n\n"
+            "Si le master n'a pas assez de données sur ce type (< min_trades) :\n"
+            "→ le filtre est ignoré et le trade est autorisé par défaut.\n\n"
+            "*Exemple avec seuil = 55%, min 10 trades :*\n"
+            "Signal 'NBA : Lakers vainqueurs ce soir ?'\n"
+            "Master a 15 trades sur sports_nba à 40% WR → *bloqué* ❌\n"
+            "Master a 5 trades sur sports_nba → pas assez → *autorisé* ✅\n\n"
+            "*Paramètres liés :*\n"
+            "• Win rate minimum : ce que tu configures ici\n"
+            "• Trades minimum (min_trader_trades_for_type) : seuil\n"
+            "  de données requis pour activer le filtre"
+        ),
+    },
+
+    "min_trades": {
+        "label": "🔢 Trades minimum par catégorie",
+        "setting": "min_trader_trades_for_type",
+        "short": "Nb de trades requis pour activer le filtre WR par type",
+        "detail": (
+            "*🔢 TRADES MINIMUM PAR CATÉGORIE*\n"
+            f"{SEP}\n\n"
+            "*Rôle :*\n"
+            "Ce paramètre définit combien de trades historiques le master\n"
+            "doit avoir sur un type de marché pour que le filtre WR par\n"
+            "catégorie soit activé.\n\n"
+            "*Logique :*\n"
+            "Si le master n'a que 3 trades sur `sports_nba`, on ne peut\n"
+            "pas conclure qu'il est mauvais ou bon — c'est trop peu.\n"
+            "Dans ce cas, le filtre est ignoré et le trade est autorisé.\n\n"
+            "`bloqué` si trades ≥ min_trades ET win_rate < min_wr\n"
+            "`autorisé` si trades < min_trades (pas assez de données)\n\n"
+            "*Valeurs recommandées :*\n"
+            "🛡️ Prudent : 8-10 trades min\n"
+            "⚖️ Équilibré : 10 trades min\n"
+            "⚡ Agressif : 5 trades min (filtre moins strict)"
+        ),
+    },
+}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -262,39 +451,24 @@ CRITERIA_ORDER = ["spread", "liquidity", "conviction", "trader_form", "timing", 
 # ═══════════════════════════════════════════════════════════════
 
 def detect_active_profile(us) -> str:
-    """Détermine quel profil correspond aux réglages actuels."""
     if not getattr(us, "signal_scoring_enabled", True):
         return "all_pass"
-
     min_score = float(getattr(us, "min_signal_score", 40))
     smart     = bool(getattr(us, "smart_filter_enabled", True))
     criteria  = getattr(us, "scoring_criteria", None)
-
-    # Tout passe
-    if not getattr(us, "signal_scoring_enabled", True):
-        return "all_pass"
-
-    # Prudent : seuil ≥ 65
     if min_score >= 65:
         return "prudent"
-
-    # Agressif : smart filter off + seuil bas
     if not smart and min_score <= 25:
         return "aggressive"
-
-    # Équilibré : pas de critères custom + smart on
     if criteria is None and smart and 35 <= min_score <= 55:
         return "balanced"
-
     return "custom"
 
 
 def _get_criteria_config(us) -> dict:
-    """Retourne la config critères de l'user, avec fallback sur les défauts."""
     raw = getattr(us, "scoring_criteria", None)
     if not raw:
         return dict(DEFAULT_CRITERIA_CONFIG)
-    # Merge avec défauts pour les critères manquants
     merged = dict(DEFAULT_CRITERIA_CONFIG)
     merged.update(raw)
     return merged
@@ -305,7 +479,6 @@ def _get_criteria_config(us) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 async def show_signals_menu(update: Update, user, us) -> None:
-    """Affiche le menu principal du topic 📊 Signals."""
     from bot.models.signal_score import SignalScore
     from sqlalchemy import select, func
 
@@ -318,104 +491,95 @@ async def show_signals_menu(update: Update, user, us) -> None:
     smart_on   = bool(getattr(us, "smart_filter_enabled", True))
     skip_cf    = bool(getattr(us, "skip_coin_flip", True))
     conv_min   = float(getattr(us, "min_conviction_pct", 2.0))
+    drift_max  = float(getattr(us, "max_price_drift_pct", 5.0))
+    wr_min     = float(getattr(us, "min_trader_winrate_for_type", 55.0))
 
     criteria = _get_criteria_config(us)
 
-    # Récupère les stats signaux
-    total_signals  = 0
-    passed_signals = 0
-    avg_score      = 0.0
+    total_signals = passed_signals = 0
+    avg_score = 0.0
     try:
         async with async_session() as s:
-            total_signals = (await s.scalar(
-                select(func.count(SignalScore.id))
-            )) or 0
+            total_signals  = (await s.scalar(select(func.count(SignalScore.id)))) or 0
             passed_signals = (await s.scalar(
                 select(func.count(SignalScore.id)).where(SignalScore.passed == True)  # noqa
             )) or 0
-            avg_val = await s.scalar(select(func.avg(SignalScore.total_score)))
-            avg_score = float(avg_val or 0)
+            avg_val        = await s.scalar(select(func.avg(SignalScore.total_score)))
+            avg_score      = float(avg_val or 0)
     except Exception:
         pass
 
-    pass_rate  = round(passed_signals / total_signals * 100, 0) if total_signals else 0
+    pass_rate  = round(passed_signals / total_signals * 100) if total_signals else 0
     block_rate = 100 - pass_rate
-
-    # ── Texte ──────────────────────────────────────────────────
-    on  = "✅"
-    off = "❌"
+    on = "✅"; off = "❌"
 
     lines = [f"📊 *SIGNAUX & SCORING*\n{SEP}\n"]
 
     if not scoring_on:
         lines += [
-            f"*Profil actif :* {profile_label}",
+            f"*Profil :* {profile_label}",
             f"🎲 _Scoring désactivé — tous les trades sont copiés_\n",
         ]
     else:
         score_bar = bar(min_score, 100, 12)
         lines += [
-            f"*Profil actif :* {profile_label}",
-            f"*Seuil minimum :* *{min_score:.0f}/100*",
-            f"{score_bar} ← seuil\n",
-            f"*Score moyen reçu :* {avg_score:.0f}/100\n",
-            f"*── Critères actifs ──*\n",
+            f"*Profil :* {profile_label}",
+            f"*Seuil de score :* *{min_score:.0f}/100* — un signal en dessous est bloqué",
+            f"{score_bar}\n",
         ]
 
-        # Liste compacte des 6 critères
+        if avg_score > 0:
+            lines.append(f"*Score moyen reçu :* {avg_score:.0f}/100\n")
+
+        # 6 critères compacts
+        total_w = sum(
+            cfg.get("w", DEFAULT_CRITERIA_CONFIG[k]["w"])
+            for k, cfg in criteria.items()
+            if cfg.get("on", True)
+        )
+        lines.append("*── Scoring (6 critères) ──*\n")
         for key in CRITERIA_ORDER:
             info = CRITERIA_INFO[key]
             cfg  = criteria.get(key, DEFAULT_CRITERIA_CONFIG[key])
-            is_on = cfg.get("on", True)
-            weight = cfg.get("w", info["default_w"])
-            state = on if is_on else off
-            # Redistribution: si désactivé poids = 0
-            effective = f"{weight}%" if is_on else "désactivé"
-            lines.append(f"{state} *{info['label']}* — {effective} du score")
+            is_on  = cfg.get("on", True)
+            raw_w  = cfg.get("w", info["default_w"])
+            eff_w  = round(raw_w / total_w * 100) if (is_on and total_w > 0) else 0
+            state  = on if is_on else off
+            poids  = f"*{eff_w}%* du score" if is_on else "désactivé"
+            lines.append(f"{state} {info['label']} — {poids}")
 
-        lines.append("")
-
-        # Smart filter
+        # Smart Filter
+        sf_count = sum([smart_on, skip_cf, conv_min > 0, drift_max > 0, wr_min > 0])
         lines += [
-            f"*── Smart Filter ──*\n",
+            f"\n*── Smart Filter ({sf_count} filtres actifs) ──*\n",
             f"{on if smart_on else off} Smart Filter global",
-            f"  {on if skip_cf else off} Ignorer les coin-flips (≈ 50/50)",
-            f"  💪 Conviction min : *{conv_min:.0f}%* du portfolio\n",
+            f"  {on if skip_cf else off} Skip coin-flip (YES entre $0.45–$0.55)",
+            f"  💪 Conviction ≥ *{conv_min:.0f}%* du portfolio master",
+            f"  📏 Drift prix ≤ *{drift_max:.0f}%* depuis entrée master",
+            f"  📊 WR min ≥ *{wr_min:.0f}%* par catégorie de marché\n",
         ]
 
-    # Stats
     if total_signals > 0:
-        accept_bar = bar(pass_rate, 100, 10)
         lines += [
             f"*── Historique ──*\n",
-            f"{accept_bar} *{pass_rate:.0f}%* acceptés / *{block_rate:.0f}%* bloqués",
-            f"_{total_signals} signaux analysés_\n",
+            f"{bar(pass_rate, 100, 10)} *{pass_rate}%* acceptés / *{block_rate}%* bloqués",
+            f"_{total_signals} signaux analysés_",
         ]
-
-    text = "\n".join(lines)
 
     keyboard = [
         [InlineKeyboardButton("📋 Changer de profil", callback_data="sig_profile_menu")],
-        [InlineKeyboardButton("🎯 Configurer les critères", callback_data="sig_criteria_menu")],
+        [InlineKeyboardButton("📐 Critères de scoring — 6 variables", callback_data="sig_criteria_menu")],
+        [InlineKeyboardButton("🔍 Smart Filter — 5 variables", callback_data="sig_smartfilter_menu")],
         [
             InlineKeyboardButton(
-                f"🔍 Smart Filter : {on if smart_on else off}",
-                callback_data="sig_smartfilter_menu",
-            ),
-            InlineKeyboardButton(
-                f"📊 Score min : {min_score:.0f}",
-                callback_data="set_min_signal_score",
+                f"{'❌ Réactiver' if not scoring_on else f'🎯 Seuil : {min_score:.0f}/100'}",
+                callback_data="set_signal_scoring_enabled" if not scoring_on else "sig_score_min_picker",
             ),
         ],
     ]
 
-    if not scoring_on:
-        keyboard.insert(0, [InlineKeyboardButton(
-            "✅ Réactiver le scoring", callback_data="set_signal_scoring_enabled"
-        )])
-
     await update.effective_message.reply_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+        "\n".join(lines), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -439,33 +603,28 @@ async def show_profile_picker(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"📋 *CHOISIR UN PROFIL*\n{SEP}\n",
         "_Le profil configure automatiquement le seuil de score,_",
         "_les poids des critères et le smart filter.\n_",
+        "_Pour tout contrôler manuellement → 🔧 Personnalisé_\n",
     ]
-
     for key, p in PROFILES.items():
-        tick = "▶️ " if key == current else "   "
-        lines += [
-            f"{tick}*{p['label']}*",
-            f"_{p['description'].replace(chr(10), ' ')}_\n",
-        ]
+        tick = "▶️ " if key == current else "     "
+        lines += [f"{tick}*{p['label']}*", f"_{p['description'].replace(chr(10), ' ')}_\n"]
 
     lines += [
-        "   *🔧 Personnalisé*",
-        "_Configurez chaque critère manuellement via 'Configurer les critères'._",
+        "▶️ " if current == "custom" else "     ",
+        "*🔧 Personnalisé*",
+        "_Configurez chaque critère et filtre manuellement._",
     ]
 
-    text = "\n".join(lines)
-
     keyboard = [
-        [InlineKeyboardButton(f"{'▶ ' if current == 'prudent'    else ''}{PROFILES['prudent']['label']}",    callback_data="sig_set_profile:prudent")],
-        [InlineKeyboardButton(f"{'▶ ' if current == 'balanced'   else ''}{PROFILES['balanced']['label']}",   callback_data="sig_set_profile:balanced")],
-        [InlineKeyboardButton(f"{'▶ ' if current == 'aggressive' else ''}{PROFILES['aggressive']['label']}", callback_data="sig_set_profile:aggressive")],
-        [InlineKeyboardButton(f"{'▶ ' if current == 'all_pass'   else ''}{PROFILES['all_pass']['label']}",   callback_data="sig_set_profile:all_pass")],
-        [InlineKeyboardButton("🔧 Personnaliser les critères", callback_data="sig_criteria_menu")],
-        [InlineKeyboardButton("⬅️ Retour Signals", callback_data="sig_back")],
+        [InlineKeyboardButton(f"{'▶ ' if current == k else ''}{v['label']}", callback_data=f"sig_set_profile:{k}")]
+        for k, v in PROFILES.items()
+    ] + [
+        [InlineKeyboardButton("🔧 Personnaliser manuellement", callback_data="sig_criteria_menu")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data="sig_back")],
     ]
 
     await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+        "\n".join(lines), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -492,13 +651,15 @@ async def apply_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         us.min_conviction_pct     = profile["min_conviction_pct"]
         us.scoring_criteria       = profile["scoring_criteria"]
         await session.commit()
-        await session.refresh(us)
-        # Re-display signals menu
-        await _edit_to_signals_menu(query, user, us)
+
+    await query.answer(f"✅ Profil {profile['label']} appliqué")
+    # Retour au menu signals
+    query.data = "sig_back"
+    await sig_back(update, context)
 
 
 # ═══════════════════════════════════════════════════════════════
-# LISTE DES CRITÈRES
+# LISTE DES CRITÈRES DE SCORING
 # ═══════════════════════════════════════════════════════════════
 
 async def show_criteria_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -511,58 +672,61 @@ async def show_criteria_list(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not user:
             return
         us = await get_or_create_settings(session, user)
-        criteria = _get_criteria_config(us)
+        criteria   = _get_criteria_config(us)
         scoring_on = bool(getattr(us, "signal_scoring_enabled", True))
+        min_score  = float(getattr(us, "min_signal_score", 40))
 
-    lines = [
-        f"🎯 *CRITÈRES DE SCORING*\n{SEP}\n",
-        "_Cliquez sur un critère pour voir sa description complète,_",
-        "_activer/désactiver, ou modifier son poids._\n",
-    ]
-
-    if not scoring_on:
-        lines.append("⚠️ _Le scoring est désactivé — activez-le d'abord._\n")
-
-    # Calcule les poids effectifs normalisés
-    active_weights = {}
     total_w = sum(
         cfg.get("w", DEFAULT_CRITERIA_CONFIG[k]["w"])
         for k, cfg in criteria.items()
         if cfg.get("on", True)
     )
+
+    lines = [
+        f"📐 *CRITÈRES DE SCORING*\n{SEP}\n",
+        f"*Comment ça marche :*\n",
+        "_Chaque signal reçoit un score de 0 à 100._",
+        "_Ce score est la somme pondérée de 6 critères._",
+        "_Si le score total < seuil ({:.0f}/100), le trade est bloqué._\n".format(min_score),
+        "_Cliquez sur un critère pour voir la formule exacte,_",
+        "_activer/désactiver, ou modifier son poids dans le score._\n",
+    ]
+
+    if not scoring_on:
+        lines.append("⚠️ _Scoring désactivé — réactivez-le pour que les critères soient pris en compte._\n")
+
     for key in CRITERIA_ORDER:
-        cfg = criteria.get(key, DEFAULT_CRITERIA_CONFIG[key])
+        info   = CRITERIA_INFO[key]
+        cfg    = criteria.get(key, DEFAULT_CRITERIA_CONFIG[key])
         is_on  = cfg.get("on", True)
-        raw_w  = cfg.get("w", CRITERIA_INFO[key]["default_w"])
-        effective_w = round(raw_w / total_w * 100) if (is_on and total_w > 0) else 0
-        active_weights[key] = (is_on, raw_w, effective_w)
+        raw_w  = cfg.get("w", info["default_w"])
+        eff_w  = round(raw_w / total_w * 100) if (is_on and total_w > 0) else 0
+        state  = "✅" if is_on else "❌"
+        poids  = f"{eff_w}% du score" if is_on else "désactivé"
+        lines += [
+            f"{state} *{info['label']}* — {poids}",
+            f"   _{info['short']}_",
+        ]
 
-    for key in CRITERIA_ORDER:
-        info = CRITERIA_INFO[key]
-        is_on, raw_w, eff_w = active_weights[key]
-        state = "✅" if is_on else "❌"
-        weight_str = f"*{eff_w}%* effectif" if is_on else "désactivé"
-        lines.append(f"{state} *{info['label']}* — {weight_str}")
-        lines.append(f"   _{info['short']}_")
+    lines += [
+        "",
+        "_Note : les poids sont redistribués automatiquement entre_",
+        "_les critères actifs pour toujours sommer à 100%._",
+    ]
 
-    text = "\n".join(lines)
-
-    buttons = []
-    for key in CRITERIA_ORDER:
-        info = CRITERIA_INFO[key]
-        is_on, _, _ = active_weights[key]
-        state = "✅" if is_on else "❌"
-        buttons.append([
-            InlineKeyboardButton(
-                f"{state} {info['label']}",
-                callback_data=f"sig_criterion:{key}",
-            )
-        ])
-
-    buttons.append([InlineKeyboardButton("⬅️ Retour Signals", callback_data="sig_back")])
+    buttons = [
+        [InlineKeyboardButton(
+            f"{'✅' if criteria.get(k, DEFAULT_CRITERIA_CONFIG[k]).get('on', True) else '❌'} {CRITERIA_INFO[k]['label']}",
+            callback_data=f"sig_criterion:{k}",
+        )]
+        for k in CRITERIA_ORDER
+    ] + [
+        [InlineKeyboardButton("🔍 Smart Filter (5 filtres)", callback_data="sig_smartfilter_menu")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data="sig_back")],
+    ]
 
     await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
+        "\n".join(lines), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
     )
 
 
@@ -591,7 +755,6 @@ async def show_criterion_detail(update: Update, context: ContextTypes.DEFAULT_TY
     is_on  = cfg.get("on", True)
     weight = cfg.get("w", info["default_w"])
 
-    # Poids effectif
     total_w = sum(
         criteria.get(k, DEFAULT_CRITERIA_CONFIG[k]).get("w", DEFAULT_CRITERIA_CONFIG[k]["w"])
         for k in CRITERIA_ORDER
@@ -599,53 +762,37 @@ async def show_criterion_detail(update: Update, context: ContextTypes.DEFAULT_TY
     )
     eff_w = round(weight / total_w * 100) if (is_on and total_w > 0) else 0
 
-    on  = "✅"
-    off = "❌"
-
-    lines = [
-        f"*{info['label']}*\n{SEP}\n",
-        info["what"],
-        f"\n*── Barème ──*\n",
-        info["scale"],
-        f"\n*── Réglages actuels ──*\n",
-        f"Statut : {on if is_on else off} {'Actif' if is_on else 'Désactivé'}",
-    ]
-
+    # Texte : fiche complète + état actuel
+    text = info["what"]
+    text += f"\n\n*── Réglages actuels ──*\n"
+    text += f"Statut : {'✅ Actif' if is_on else '❌ Désactivé'}\n"
     if is_on:
         w_bar = bar(weight, 40, 10)
-        lines += [
-            f"Poids brut : *{weight}%*",
-            f"Poids effectif : *{eff_w}%* du score total",
-            f"{w_bar} (poids parmi critères actifs)",
-        ]
+        text += f"Poids brut : *{weight}%* (sur 100% répartis)\n"
+        text += f"Poids effectif : *{eff_w}%* du score total\n"
+        text += f"{w_bar}"
     else:
-        lines.append("_Ce critère ne contribue pas au score._")
-
-    text = "\n".join(lines)
+        text += "_Ce critère ne contribue pas au score._"
 
     # Bouton toggle
-    toggle_label = f"❌ Désactiver {info['label'].split(' ', 1)[1]}" if is_on else f"✅ Activer {info['label'].split(' ', 1)[1]}"
+    toggle_label = (
+        f"❌ Désactiver" if is_on else f"✅ Activer"
+    )
 
-    # Boutons de poids (seulement si actif)
+    # Boutons poids (si actif)
     weight_buttons = []
     if is_on:
-        weight_row1 = []
-        weight_row2 = []
-        for i, w in enumerate(info["weight_options"]):
+        opts = info["weight_options"]
+        row = []
+        for i, w in enumerate(opts):
             mark = "●" if w == weight else ""
-            btn = InlineKeyboardButton(
+            row.append(InlineKeyboardButton(
                 f"{mark}{w}%{mark}" if mark else f"{w}%",
                 callback_data=f"sig_weight:{crit_key}:{w}",
-            )
-            if i < len(info["weight_options"]) // 2:
-                weight_row1.append(btn)
-            else:
-                weight_row2.append(btn)
-
-        if weight_row1:
-            weight_buttons.append(weight_row1)
-        if weight_row2:
-            weight_buttons.append(weight_row2)
+            ))
+            if len(row) == 3 or i == len(opts) - 1:
+                weight_buttons.append(row)
+                row = []
 
     keyboard = [
         [InlineKeyboardButton(toggle_label, callback_data=f"sig_toggle_crit:{crit_key}")],
@@ -665,9 +812,9 @@ async def show_criterion_detail(update: Update, context: ContextTypes.DEFAULT_TY
 async def toggle_criterion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     crit_key = (query.data or "").replace("sig_toggle_crit:", "")
-    await query.answer()
 
     if crit_key not in CRITERIA_INFO:
+        await query.answer("❌ Critère inconnu", show_alert=True)
         return
 
     tg_id = update.effective_user.id
@@ -681,13 +828,12 @@ async def toggle_criterion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         cfg    = dict(criteria.get(crit_key, DEFAULT_CRITERIA_CONFIG[crit_key]))
         new_on = not cfg.get("on", True)
 
-        # Empêche de désactiver TOUS les critères
         if not new_on:
-            active_count = sum(
+            active = sum(
                 1 for k in CRITERIA_ORDER
                 if k != crit_key and criteria.get(k, DEFAULT_CRITERIA_CONFIG[k]).get("on", True)
             )
-            if active_count == 0:
+            if active == 0:
                 await query.answer("⚠️ Gardez au moins 1 critère actif", show_alert=True)
                 return
 
@@ -697,7 +843,6 @@ async def toggle_criterion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await session.commit()
 
     await query.answer("✅ Activé" if new_on else "❌ Désactivé")
-    # Rafraîchit la fiche du critère
     query.data = f"sig_criterion:{crit_key}"
     await show_criterion_detail(update, context)
 
@@ -708,11 +853,10 @@ async def toggle_criterion(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def set_criterion_weight(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    parts = (query.data or "").split(":")  # ["sig_weight", key, value]
+    parts = (query.data or "").split(":")
     if len(parts) != 3:
         return
     _, crit_key, raw_val = parts
-    await query.answer()
 
     try:
         new_w = int(raw_val)
@@ -729,7 +873,6 @@ async def set_criterion_weight(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         us = await get_or_create_settings(session, user)
         criteria = _get_criteria_config(us)
-
         cfg = dict(criteria.get(crit_key, DEFAULT_CRITERIA_CONFIG[crit_key]))
         cfg["w"] = new_w
         criteria[crit_key] = cfg
@@ -737,13 +880,12 @@ async def set_criterion_weight(update: Update, context: ContextTypes.DEFAULT_TYP
         await session.commit()
 
     await query.answer(f"✅ Poids → {new_w}%")
-    # Rafraîchit la fiche
     query.data = f"sig_criterion:{crit_key}"
     await show_criterion_detail(update, context)
 
 
 # ═══════════════════════════════════════════════════════════════
-# SMART FILTER MENU
+# SMART FILTER — MENU PRINCIPAL
 # ═══════════════════════════════════════════════════════════════
 
 async def show_smartfilter_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -756,72 +898,99 @@ async def show_smartfilter_menu(update: Update, context: ContextTypes.DEFAULT_TY
         if not user:
             return
         us = await get_or_create_settings(session, user)
-        smart_on  = bool(getattr(us, "smart_filter_enabled", True))
-        skip_cf   = bool(getattr(us, "skip_coin_flip", True))
-        conv_min  = float(getattr(us, "min_conviction_pct", 2.0))
-        drift_max = float(getattr(us, "max_price_drift_pct", 5.0))
-        wr_min    = float(getattr(us, "min_trader_winrate_for_type", 55.0))
+        smart_on   = bool(getattr(us, "smart_filter_enabled", True))
+        skip_cf    = bool(getattr(us, "skip_coin_flip", True))
+        conv_min   = float(getattr(us, "min_conviction_pct", 2.0))
+        drift_max  = float(getattr(us, "max_price_drift_pct", 5.0))
+        wr_min     = float(getattr(us, "min_trader_winrate_for_type", 55.0))
         trades_min = int(getattr(us, "min_trader_trades_for_type", 10))
 
-    on  = "✅"
-    off = "❌"
+    on = "✅"; off = "❌"
 
     lines = [
         f"🔍 *SMART FILTER*\n{SEP}\n",
-        f"*Smart Filter global :* {on if smart_on else off}\n",
+        f"*{on if smart_on else off} Smart Filter global*\n",
+        "_Ces filtres s'appliquent AVANT le scoring._",
+        "_Un signal bloqué ici n'est jamais soumis au score._\n",
+        "_Cliquez sur un filtre pour voir sa définition exacte._\n",
 
-        f"*── Filtres actifs ──*\n",
+        f"*1.* 🪙 *Skip Coin-Flip :* {on if skip_cf else off}",
+        f"   _Bloque si prix YES entre $0.45 et $0.55 (≈ 50/50)_\n",
 
-        f"{on if skip_cf else off} *Skip coin-flip*",
-        f"   _Ignore les marchés où le score est entre 45-55%_",
-        f"   _= marchés quasi-aléatoires, pas de edge réel_\n",
+        f"*2.* 💪 *Conviction min :* *{conv_min:.0f}%* du portfolio master",
+        f"   _Bloque si trade < {conv_min:.0f}% du portefeuille total du trader_\n",
 
-        f"{on} *Conviction minimum : {conv_min:.0f}%*",
-        f"   _N'accepte que les trades où le master a misé ≥ {conv_min:.0f}%_",
-        f"   _de son portfolio — filtre les micro-positions_\n",
+        f"*3.* 📏 *Drift prix max :* *{drift_max:.0f}%* depuis entrée master",
+        f"   _Bloque si le prix a bougé de + de {drift_max:.0f}% depuis l'achat du master_\n",
 
-        f"{on} *Drift de prix max : {drift_max:.0f}%*",
-        f"   _Si le prix a déjà bougé de + de {drift_max:.0f}% depuis l'entrée du master,_",
-        f"   _le trade est ignoré (tu achètes trop tard)_\n",
+        f"*4.* 📊 *WR min par catégorie :* *{wr_min:.0f}%*",
+        f"   _Bloque si le master a < {wr_min:.0f}% WR sur ce type de marché_\n",
 
-        f"{on} *Win rate min pour type : {wr_min:.0f}%*",
-        f"   _Le trader doit avoir ≥ {wr_min:.0f}% WR sur ce type de marché_",
-        f"   _(Crypto, Politique, Sports…) sur au moins {trades_min} trades_\n",
+        f"*5.* 🔢 *Trades min pour activer (4) :* *{trades_min}*",
+        f"   _Le filtre WR catégorie n'est actif qu'avec ≥ {trades_min} trades d'historique_",
     ]
-
-    text = "\n".join(lines)
 
     keyboard = [
         [InlineKeyboardButton(
-            f"🔍 Smart Filter : {on if smart_on else off}",
+            f"{on if smart_on else off} Smart Filter global",
             callback_data="set_smart_filter_enabled",
         )],
-        [InlineKeyboardButton(
-            f"🪙 Skip coin-flip : {on if skip_cf else off}",
-            callback_data="set_skip_coin_flip",
-        )],
+        [InlineKeyboardButton("🪙 1. Skip Coin-Flip — définition", callback_data="sig_sf_detail:coin_flip")],
+        [InlineKeyboardButton("💪 2. Conviction — définition", callback_data="sig_sf_detail:conviction")],
+        [InlineKeyboardButton("📏 3. Drift prix — définition", callback_data="sig_sf_detail:drift")],
+        [InlineKeyboardButton("📊 4. WR par catégorie — définition", callback_data="sig_sf_detail:trader_edge")],
+        [InlineKeyboardButton("🔢 5. Trades minimum — définition", callback_data="sig_sf_detail:min_trades")],
         [
-            InlineKeyboardButton(
-                f"💪 Conviction ≥ {conv_min:.0f}%",
-                callback_data="set_min_conviction_pct",
-            ),
-            InlineKeyboardButton(
-                f"📏 Drift ≤ {drift_max:.0f}%",
-                callback_data="set_max_price_drift_pct",
-            ),
+            InlineKeyboardButton(f"{on if skip_cf else off} Coin-Flip", callback_data="set_skip_coin_flip"),
+            InlineKeyboardButton(f"💪 Conv. ≥ {conv_min:.0f}%", callback_data="set_min_conviction_pct"),
+            InlineKeyboardButton(f"📏 Drift ≤ {drift_max:.0f}%", callback_data="set_max_price_drift_pct"),
         ],
-        [
-            InlineKeyboardButton(
-                f"📈 WR min {wr_min:.0f}%",
-                callback_data="set_min_trader_winrate_for_type",
-            ),
-            InlineKeyboardButton(
-                f"🔢 Trades min {trades_min}",
-                callback_data="set_min_trader_trades_for_type",
-            ),
-        ],
-        [InlineKeyboardButton("⬅️ Retour Signals", callback_data="sig_back")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data="sig_back")],
     ]
+
+    await query.edit_message_text(
+        "\n".join(lines), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# FICHE DÉTAILLÉE D'UN FILTRE SMART FILTER
+# ═══════════════════════════════════════════════════════════════
+
+async def show_sf_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    filter_key = (query.data or "").replace("sig_sf_detail:", "")
+    await query.answer()
+
+    info = SMART_FILTER_INFO.get(filter_key)
+    if not info:
+        return
+
+    tg_id = update.effective_user.id
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        current_val = getattr(us, info["setting"], None)
+
+    text = info["detail"]
+    if current_val is not None:
+        text += f"\n\n*Valeur actuelle :* `{current_val}`"
+
+    # Bouton pour modifier via preset picker si c'est un nombre
+    setting_cb = info["setting"]
+    keyboard = [
+        [InlineKeyboardButton(f"✏️ Modifier ce paramètre", callback_data=f"set_{setting_cb}")],
+        [InlineKeyboardButton("⬅️ Retour Smart Filter", callback_data="sig_smartfilter_menu")],
+    ]
+
+    # Pour les toggles, bouton direct
+    if isinstance(current_val, bool):
+        keyboard[0] = [InlineKeyboardButton(
+            f"{'❌ Désactiver' if current_val else '✅ Activer'}",
+            callback_data=f"set_{setting_cb}",
+        )]
 
     await query.edit_message_text(
         text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
@@ -829,14 +998,61 @@ async def show_smartfilter_menu(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 # ═══════════════════════════════════════════════════════════════
-# RETOUR AU MENU SIGNALS (depuis un sous-menu)
+# PICKER DU SEUIL DE SCORE MINIMUM
 # ═══════════════════════════════════════════════════════════════
 
-async def sig_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Retour au menu principal Signals — envoie un nouveau message."""
+async def show_score_min_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
+    tg_id = update.effective_user.id
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        current = float(getattr(us, "min_signal_score", 40))
+
+    presets = [10, 20, 25, 30, 40, 50, 60, 65, 70, 80, 90]
+    rows = []
+    row = []
+    for i, p in enumerate(presets):
+        mark = "●" if p == int(current) else ""
+        row.append(InlineKeyboardButton(
+            f"{mark}{p}{mark}" if mark else str(p),
+            callback_data=f"grp_set:min_signal_score:{p}",
+        ))
+        if len(row) == 4 or i == len(presets) - 1:
+            rows.append(row)
+            row = []
+
+    rows.append([InlineKeyboardButton("⬅️ Retour", callback_data="sig_back")])
+
+    score_bar = bar(current, 100, 14)
+    await query.edit_message_text(
+        f"🎯 *SEUIL DE SCORE MINIMUM*\n{SEP}\n\n"
+        f"Valeur actuelle : *{current:.0f}/100*\n"
+        f"{score_bar}\n\n"
+        f"Un signal avec un score *inférieur* à ce seuil est bloqué automatiquement.\n\n"
+        f"*Repères :*\n"
+        f"🛡️ Prudent ≥ *65* — peu de trades, haute qualité\n"
+        f"⚖️ Équilibré ≥ *40* — recommandé\n"
+        f"⚡ Agressif ≥ *20* — beaucoup de trades\n"
+        f"🎲 Tout passe = *0* (scoring désactivé)\n\n"
+        f"Choisissez un seuil :",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# RETOUR AU MENU SIGNALS
+# ═══════════════════════════════════════════════════════════════
+
+async def sig_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query:
+        await query.answer()
     tg_id = update.effective_user.id
     try:
         async with async_session() as session:
@@ -850,121 +1066,19 @@ async def sig_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
-# HELPER — RE-RENDER DANS LE MESSAGE EXISTANT APRÈS APPLY PROFILE
-# ═══════════════════════════════════════════════════════════════
-
-async def _edit_to_signals_menu(query, user, us) -> None:
-    """Affiche le menu Signals en éditant le message courant (après apply profile)."""
-    from bot.models.signal_score import SignalScore
-    from sqlalchemy import select, func
-
-    profile_key   = detect_active_profile(us)
-    profile       = PROFILES.get(profile_key, {})
-    profile_label = profile.get("label", "🔧 Personnalisé") if profile_key != "custom" else "🔧 Personnalisé"
-
-    scoring_on = bool(getattr(us, "signal_scoring_enabled", True))
-    min_score  = float(getattr(us, "min_signal_score", 40))
-    smart_on   = bool(getattr(us, "smart_filter_enabled", True))
-
-    on = "✅"; off = "❌"
-
-    lines = [f"📊 *SIGNAUX & SCORING*\n{SEP}\n"]
-    if not scoring_on:
-        lines += [f"*Profil actif :* {profile_label}", "🎲 _Scoring désactivé_\n"]
-    else:
-        score_bar = bar(min_score, 100, 12)
-        criteria = _get_criteria_config(us)
-        lines += [
-            f"*Profil actif :* {profile_label}",
-            f"*Seuil minimum :* *{min_score:.0f}/100*",
-            f"{score_bar} ← seuil\n",
-        ]
-        for key in CRITERIA_ORDER:
-            info = CRITERIA_INFO[key]
-            cfg  = criteria.get(key, DEFAULT_CRITERIA_CONFIG[key])
-            is_on = cfg.get("on", True)
-            weight = cfg.get("w", info["default_w"])
-            state = on if is_on else off
-            lines.append(f"{state} *{info['label']}* — {'{}%'.format(weight) if is_on else 'désactivé'}")
-
-        lines += ["", f"{on if smart_on else off} Smart Filter"]
-
-    text = "\n".join(lines)
-    keyboard = [
-        [InlineKeyboardButton("📋 Changer de profil", callback_data="sig_profile_menu")],
-        [InlineKeyboardButton("🎯 Configurer les critères", callback_data="sig_criteria_menu")],
-        [
-            InlineKeyboardButton(f"🔍 Smart Filter : {on if smart_on else off}", callback_data="sig_smartfilter_menu"),
-            InlineKeyboardButton(f"📊 Score min : {min_score:.0f}", callback_data="set_min_signal_score"),
-        ],
-    ]
-
-    await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-# ═══════════════════════════════════════════════════════════════
-# AJOUT AU PRESET PICKER — score min (dans group_actions)
-# ═══════════════════════════════════════════════════════════════
-
-async def show_score_min_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Picker du score minimum — depuis le bouton 'set_min_signal_score' en groupe."""
-    query = update.callback_query
-    await query.answer()
-
-    tg_id = update.effective_user.id
-    async with async_session() as session:
-        user = await get_user_by_telegram_id(session, tg_id)
-        if not user:
-            return
-        us = await get_or_create_settings(session, user)
-        current = float(getattr(us, "min_signal_score", 40))
-
-    presets = [15, 25, 30, 40, 50, 60, 65, 70, 80]
-    rows = []
-    row = []
-    for p in presets:
-        mark = "●" if p == int(current) else ""
-        row.append(InlineKeyboardButton(
-            f"{mark}{p}{mark}" if mark else str(p),
-            callback_data=f"grp_set:min_signal_score:{p}",
-        ))
-        if len(row) == 3:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-
-    rows.append([InlineKeyboardButton("⬅️ Retour Signals", callback_data="sig_back")])
-
-    score_bar = bar(current, 100, 12)
-    await query.edit_message_text(
-        f"🎯 *Score minimum du signal*\n{SEP}\n\n"
-        f"Valeur actuelle : *{current:.0f}/100*\n"
-        f"{score_bar}\n\n"
-        f"_Chaque signal doit dépasser ce seuil pour être copié._\n"
-        f"_🛡️ Prudent ≥ 65 | ⚖️ Équilibré ≥ 40 | ⚡ Agressif ≥ 20_\n\n"
-        f"Choisissez un seuil :",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-
-
-# ═══════════════════════════════════════════════════════════════
 # ENREGISTREMENT
 # ═══════════════════════════════════════════════════════════════
 
 def get_signals_handlers() -> list:
-    """Handlers pour les callbacks sig_* — groupe ET DM."""
     return [
-        CallbackQueryHandler(show_profile_picker,    pattern=r"^sig_profile_menu$"),
-        CallbackQueryHandler(apply_profile,          pattern=r"^sig_set_profile:"),
-        CallbackQueryHandler(show_criteria_list,     pattern=r"^sig_criteria_menu$"),
-        CallbackQueryHandler(show_criterion_detail,  pattern=r"^sig_criterion:"),
-        CallbackQueryHandler(toggle_criterion,       pattern=r"^sig_toggle_crit:"),
-        CallbackQueryHandler(set_criterion_weight,   pattern=r"^sig_weight:"),
-        CallbackQueryHandler(show_smartfilter_menu,  pattern=r"^sig_smartfilter_menu$"),
-        CallbackQueryHandler(show_score_min_picker,  pattern=r"^sig_score_min_picker$"),
-        CallbackQueryHandler(sig_back,               pattern=r"^sig_back$"),
+        CallbackQueryHandler(show_profile_picker,   pattern=r"^sig_profile_menu$"),
+        CallbackQueryHandler(apply_profile,         pattern=r"^sig_set_profile:"),
+        CallbackQueryHandler(show_criteria_list,    pattern=r"^sig_criteria_menu$"),
+        CallbackQueryHandler(show_criterion_detail, pattern=r"^sig_criterion:"),
+        CallbackQueryHandler(toggle_criterion,      pattern=r"^sig_toggle_crit:"),
+        CallbackQueryHandler(set_criterion_weight,  pattern=r"^sig_weight:"),
+        CallbackQueryHandler(show_smartfilter_menu, pattern=r"^sig_smartfilter_menu$"),
+        CallbackQueryHandler(show_sf_detail,        pattern=r"^sig_sf_detail:"),
+        CallbackQueryHandler(show_score_min_picker, pattern=r"^sig_score_min_picker$"),
+        CallbackQueryHandler(sig_back,              pattern=r"^sig_back$"),
     ]
