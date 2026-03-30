@@ -339,7 +339,198 @@ SCORING_PROFILES = {
         "scoring_enabled": False,
         "criteria": None,
     },
+    "custom": {
+        "label": "🔧 Personnalisé",
+        "short": "Configuration manuelle complète",
+        "description": (
+            "Aucun profil actif — vous gérez chaque critère\n"
+            "et chaque filtre manuellement."
+        ),
+        "min_signal_score": None,  # keep current
+        "scoring_enabled": True,
+        "criteria": None,  # keep current
+    },
 }
+
+
+# ─────────────────────────────────────────────
+# Custom filters — toggleable settings beyond the 6 scoring criteria
+# Each filter: field, label, emoji, description, unit, type, presets
+# ─────────────────────────────────────────────
+
+CUSTOM_FILTERS = {
+    "skip_coin_flip": {
+        "emoji": "🪙",
+        "name": "Skip 50/50",
+        "field": "skip_coin_flip",
+        "type": "toggle",
+        "description": (
+            "Ignore les marchés où le prix est entre 0.45 et 0.55.\n"
+            "Ces marchés sont des « coin-flip » (pile ou face) —\n"
+            "aucun avantage statistique, autant ne pas miser."
+        ),
+    },
+    "min_conviction": {
+        "emoji": "💪",
+        "name": "Conviction minimum",
+        "field": "min_conviction_pct",
+        "type": "value",
+        "unit": "%",
+        "description": (
+            "Taille minimum du trade par rapport au portfolio\n"
+            "du trader. Si le trader ne mise que 0.5% de son\n"
+            "capital, c'est un signal faible — on le rejette.\n\n"
+            "Recommandé : 2% minimum."
+        ),
+        "presets": [("1%", 1), ("2%", 2), ("3%", 3), ("5%", 5), ("10%", 10)],
+    },
+    "max_price_drift": {
+        "emoji": "📐",
+        "name": "Drift de prix max",
+        "field": "max_price_drift_pct",
+        "type": "value",
+        "unit": "%",
+        "description": (
+            "Si le prix a bougé de plus de X% depuis le trade\n"
+            "du trader, on ne copie pas (le prix a déjà bougé,\n"
+            "on arriverait trop tard).\n\n"
+            "Recommandé : 5% maximum."
+        ),
+        "presets": [("2%", 2), ("3%", 3), ("5%", 5), ("8%", 8), ("10%", 10)],
+    },
+    "min_trader_winrate": {
+        "emoji": "🏆",
+        "name": "Win rate min du trader",
+        "field": "min_trader_winrate_for_type",
+        "type": "value",
+        "unit": "%",
+        "description": (
+            "Ne copie que les traders avec un win rate\n"
+            "supérieur à ce seuil sur cette catégorie.\n"
+            "Un trader à 40% perd de l'argent — inutile de copier.\n\n"
+            "Recommandé : 55% minimum."
+        ),
+        "presets": [("45%", 45), ("50%", 50), ("55%", 55), ("60%", 60), ("70%", 70)],
+    },
+    "min_trader_trades": {
+        "emoji": "📊",
+        "name": "Trades min du trader",
+        "field": "min_trader_trades_for_type",
+        "type": "value",
+        "unit": " trades",
+        "description": (
+            "Nombre minimum de trades passés par le trader\n"
+            "avant qu'on le copie. Evite de copier quelqu'un\n"
+            "qui n'a que 2 trades au compteur (pas fiable).\n\n"
+            "Recommandé : 10 trades minimum."
+        ),
+        "presets": [("5", 5), ("10", 10), ("15", 15), ("20", 20), ("30", 30)],
+    },
+    "cold_trader_threshold": {
+        "emoji": "🥶",
+        "name": "Seuil trader froid",
+        "field": "cold_trader_threshold",
+        "type": "value",
+        "unit": "%",
+        "description": (
+            "Si le win rate récent d'un trader descend sous\n"
+            "ce seuil, le bot le met automatiquement en pause.\n"
+            "Il ne sera plus copié tant qu'il ne remonte pas.\n\n"
+            "Recommandé : 40%."
+        ),
+        "presets": [("30%", 30), ("35%", 35), ("40%", 40), ("45%", 45), ("50%", 50)],
+    },
+    "max_trade_usdc": {
+        "emoji": "💰",
+        "name": "Trade max (USDC)",
+        "field": "max_trade_usdc",
+        "type": "value",
+        "unit": " USDC",
+        "description": (
+            "Montant maximum par trade copié en USDC.\n"
+            "Même si le sizing calcule un montant plus élevé,\n"
+            "il sera plafonné à cette valeur.\n\n"
+            "Protection contre les mises trop grosses."
+        ),
+        "presets": [("25", 25), ("50", 50), ("100", 100), ("200", 200), ("500", 500)],
+    },
+    "min_trade_usdc": {
+        "emoji": "🪙",
+        "name": "Trade min (USDC)",
+        "field": "min_trade_usdc",
+        "type": "value",
+        "unit": " USDC",
+        "description": (
+            "Montant minimum par trade. Si le sizing calcule\n"
+            "un montant inférieur, le trade est ignoré\n"
+            "(pas rentable avec les frais de gas)."
+        ),
+        "presets": [("0.5", 0.5), ("1", 1), ("2", 2), ("5", 5), ("10", 10)],
+    },
+    "max_positions": {
+        "emoji": "📦",
+        "name": "Positions max",
+        "field": "max_positions",
+        "type": "value",
+        "unit": "",
+        "description": (
+            "Nombre maximum de positions ouvertes en même temps.\n"
+            "Au-delà, les nouveaux signaux sont ignorés.\n"
+            "Evite de trop s'exposer sur le marché.\n\n"
+            "Recommandé : 10-15."
+        ),
+        "presets": [("5", 5), ("10", 10), ("15", 15), ("20", 20), ("30", 30)],
+    },
+    "max_category_exposure": {
+        "emoji": "📂",
+        "name": "Exposition max / catégorie",
+        "field": "max_category_exposure_pct",
+        "type": "value",
+        "unit": "%",
+        "description": (
+            "% maximum du portfolio dans une seule catégorie\n"
+            "(Crypto, Sports, Politique…). Evite d'avoir\n"
+            "80% sur un seul secteur.\n\n"
+            "Recommandé : 30%."
+        ),
+        "presets": [("20%", 20), ("25%", 25), ("30%", 30), ("40%", 40), ("50%", 50)],
+    },
+    "max_direction_bias": {
+        "emoji": "⚖️",
+        "name": "Biais direction max",
+        "field": "max_direction_bias_pct",
+        "type": "value",
+        "unit": "%",
+        "description": (
+            "% maximum de positions dans la même direction\n"
+            "(YES ou NO). Si 90% de vos positions sont YES,\n"
+            "vous êtes trop exposé dans un sens.\n\n"
+            "Recommandé : 70%."
+        ),
+        "presets": [("60%", 60), ("65%", 65), ("70%", 70), ("80%", 80), ("90%", 90)],
+    },
+    "hot_streak_boost": {
+        "emoji": "🔥",
+        "name": "Boost hot streak",
+        "field": "hot_streak_boost",
+        "type": "value",
+        "unit": "×",
+        "description": (
+            "Multiplicateur de mise quand un trader est en\n"
+            "série de victoires. Un trader qui enchaîne les\n"
+            "gains voit sa mise copiée avec un bonus.\n\n"
+            "×1.0 = pas de boost, ×2.0 = mise doublée."
+        ),
+        "presets": [("×1.0", 1.0), ("×1.2", 1.2), ("×1.5", 1.5), ("×1.8", 1.8), ("×2.0", 2.0)],
+    },
+}
+
+CUSTOM_FILTER_ORDER = [
+    "skip_coin_flip", "min_conviction", "max_price_drift",
+    "min_trader_winrate", "min_trader_trades", "cold_trader_threshold",
+    "max_trade_usdc", "min_trade_usdc", "max_positions",
+    "max_category_exposure", "max_direction_bias", "hot_streak_boost",
+]
 
 CRITERIA_INFO = {
     "spread": {
@@ -490,6 +681,7 @@ def _get_user_criteria(us) -> dict:
 async def _show_signals_menu(update: Update, user: User, us) -> None:
     """Écran du topic 📊 Signals — scoring, filtres, derniers signaux."""
     from bot.models.signal_score import SignalScore
+    from bot.services.signal_scorer import compute_weights
     from sqlalchemy import select, func
 
     scoring_on = bool(getattr(us, "signal_scoring_enabled", True))
@@ -501,6 +693,9 @@ async def _show_signals_menu(update: Update, user: User, us) -> None:
 
     on  = "✅"
     off = "❌"
+
+    # Compute effective weights for display
+    weights = compute_weights(criteria)
 
     # Stats signaux récents
     total_signals = 0
@@ -523,63 +718,78 @@ async def _show_signals_menu(update: Update, user: User, us) -> None:
     block_rate = ((total_signals - passed_signals) / total_signals * 100) if total_signals > 0 else 0
     pass_rate  = 100 - block_rate
 
+    # Count active custom filters
+    active_filters = 0
+    for fk in CUSTOM_FILTER_ORDER:
+        finfo = CUSTOM_FILTERS[fk]
+        if finfo["type"] == "toggle":
+            if bool(getattr(us, finfo["field"], False)):
+                active_filters += 1
+        else:
+            active_filters += 1  # value filters are always "active"
+
     lines = [
         f"📊 *SIGNAUX & SCORING*\n{SEP}\n",
-        f"*Profil actif :* {profile_label}",
-        f"*Scoring :* {on if scoring_on else off} | *Score min :* {min_score:.0f}/100\n",
+        f"*Profil :* {profile_label}",
+        f"*Scoring :* {on if scoring_on else off} | *Seuil :* {min_score:.0f}/100",
+        f"*Smart Filter :* {on if smart_on else off} | *Filtres custom :* {active_filters}\n",
     ]
 
-    # Show each criterion with status
-    lines.append("*── Comment le score est calculé ──*\n")
-    lines.append("_Chaque signal reçu est noté de 0 à 100_\n"
-                 "_sur ces critères avant d'être copié :_\n")
+    # ── Formula explanation (concise) ──
+    lines.append("*── Comment ça marche ──*\n")
+    lines.append(
+        "_Chaque signal de trade reçu est noté sur 100._\n"
+        "_6 critères sont évalués et pondérés :_\n"
+    )
 
+    # Build a compact formula view
+    formula_parts = []
     for key in CRITERIA_ORDER:
         info = CRITERIA_INFO[key]
         cfg = criteria.get(key, {"on": True, "w": 15})
         is_on = cfg.get("on", True)
-        weight = cfg.get("w", 15)
-        status = on if is_on else off
-        lines.append(f"{info['emoji']} *{info['name']}* {status} ({weight}%)")
-        lines.append(f"  _{info['short']}_")
+        eff_w = round(weights.get(key, 0) * 100)
+
+        if is_on:
+            formula_parts.append(f"{info['emoji']}{eff_w}%")
+            lines.append(
+                f"  {info['emoji']} *{info['name']}* — {eff_w}%"
+                f"  _{info['short']}_"
+            )
+        else:
+            lines.append(f"  {info['emoji']} ~~{info['name']}~~ — _désactivé_")
 
     lines.append("")
-
-    # Filtres
-    coin_skip = bool(getattr(us, "skip_coin_flip", True))
-    min_conv  = float(getattr(us, "min_conviction_pct", 2.0))
-    lines += [
-        f"*── Filtres supplémentaires ──*\n",
-        f"Smart Filter : {on if smart_on else off}",
-        f"Skip Coin-Flip : {on if coin_skip else off}",
-        f"Conviction min : *{min_conv:.0f}%*",
-    ]
+    lines.append(f"_Score = {' + '.join(formula_parts)}_")
+    lines.append(f"_Si score < {min_score:.0f} → signal rejeté_\n")
 
     # Stats historique
     if total_signals > 0:
         accept_bar = bar(pass_rate, 100, 12)
         lines += [
-            f"\n*── Historique ──*\n",
-            f"{total_signals} signaux analysés (moy. *{avg_score:.0f}/100*)",
-            f"{accept_bar} *{pass_rate:.0f}%* acceptés / *{block_rate:.0f}%* bloqués",
+            f"*── Stats ──*",
+            f"{total_signals} signaux | moy. *{avg_score:.0f}/100* | "
+            f"{accept_bar} *{pass_rate:.0f}%* acceptés\n",
         ]
 
     text = "\n".join(lines)
 
     keyboard = [
         [
-            InlineKeyboardButton(f"📋 Changer de profil", callback_data="sc_profiles"),
-            InlineKeyboardButton("🎯 Modifier les critères", callback_data="sc_criteria"),
+            InlineKeyboardButton("📋 Profils", callback_data="sc_profiles"),
+            InlineKeyboardButton("🎯 Critères (6)", callback_data="sc_criteria"),
         ],
         [
-            InlineKeyboardButton(f"🎯 Score min : {min_score:.0f}", callback_data="set_min_signal_score"),
+            InlineKeyboardButton("🔧 Filtres custom", callback_data="sc_filters"),
+            InlineKeyboardButton("📖 Formule détaillée", callback_data="sc_formula"),
+        ],
+        [
+            InlineKeyboardButton(f"🎯 Seuil : {min_score:.0f}", callback_data="set_min_signal_score"),
             InlineKeyboardButton(f"🧠 Scoring : {on if scoring_on else off}", callback_data="set_signal_scoring_enabled"),
         ],
         [
             InlineKeyboardButton(f"🔍 Smart Filter : {on if smart_on else off}", callback_data="set_smart_filter_enabled"),
-            InlineKeyboardButton(f"🪙 Coin-flip : {on if coin_skip else off}", callback_data="set_skip_coin_flip"),
         ],
-        [InlineKeyboardButton("📊 Mes positions ouvertes", callback_data="menu_positions")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
 
@@ -995,6 +1205,7 @@ async def show_scoring_profiles(update: Update, context: ContextTypes.DEFAULT_TY
             InlineKeyboardButton("⚡ Agressif", callback_data="sc_apply:agressif"),
             InlineKeyboardButton("🎲 Tout passe", callback_data="sc_apply:yolo"),
         ],
+        [InlineKeyboardButton("🔧 Personnalisé (tout régler)", callback_data="sc_apply:custom")],
         [InlineKeyboardButton("⬅️ Retour aux signaux", callback_data="sc_back")],
     ]
 
@@ -1022,9 +1233,16 @@ async def apply_scoring_profile(update: Update, context: ContextTypes.DEFAULT_TY
             return
         us = await get_or_create_settings(session, user)
 
-        us.min_signal_score = profile["min_signal_score"]
-        us.signal_scoring_enabled = profile["scoring_enabled"]
-        us.scoring_criteria = profile["criteria"]
+        # "custom" profile: keep current criteria/score, just enable scoring
+        if profile_key == "custom":
+            us.signal_scoring_enabled = True
+            # Ensure scoring_criteria exists (copy from defaults if None)
+            if not us.scoring_criteria:
+                us.scoring_criteria = dict(DEFAULT_CRITERIA)
+        else:
+            us.min_signal_score = profile["min_signal_score"]
+            us.signal_scoring_enabled = profile["scoring_enabled"]
+            us.scoring_criteria = profile["criteria"]
 
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(us, "scoring_criteria")
@@ -1032,8 +1250,11 @@ async def apply_scoring_profile(update: Update, context: ContextTypes.DEFAULT_TY
 
     await query.answer(f"✅ Profil {profile['label']} activé", show_alert=False)
 
-    # Refresh profiles menu
-    await show_scoring_profiles(update, context)
+    # Custom → go directly to criteria list for editing
+    if profile_key == "custom":
+        await show_scoring_criteria_list(update, context)
+    else:
+        await show_scoring_profiles(update, context)
 
 
 async def show_scoring_criteria_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1234,6 +1455,290 @@ async def set_criterion_weight(update: Update, context: ContextTypes.DEFAULT_TYP
     # Refresh criterion detail
     query.data = f"sc_detail:{crit_key}"
     await show_criterion_detail(update, context)
+
+
+async def show_formula_explanation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Affiche l'explication détaillée de la formule de scoring."""
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        criteria = _get_user_criteria(us)
+
+    from bot.services.signal_scorer import compute_weights
+    weights = compute_weights(criteria)
+
+    lines = [
+        f"📖 *COMMENT LE SCORE EST CALCULÉ*\n{SEP}\n",
+        "*1. Réception du signal*",
+        "_Quand un trader que vous suivez fait un trade_",
+        "_sur Polymarket, le bot reçoit le signal._\n",
+
+        "*2. Évaluation sur 6 critères*",
+        "_Chaque critère donne une note de 0 à 100 :_\n",
+    ]
+
+    for key in CRITERIA_ORDER:
+        info = CRITERIA_INFO[key]
+        cfg = criteria.get(key, {"on": True, "w": 15})
+        is_on = cfg.get("on", True)
+        eff_w = round(weights.get(key, 0) * 100)
+
+        if is_on:
+            lines.append(f"  {info['emoji']} *{info['name']}* — poids *{eff_w}%*")
+            lines.append(f"    _{info['short']}_")
+            lines.append(f"    {info['thresholds'].split(chr(10))[0]}")  # first threshold line
+        else:
+            lines.append(f"  {info['emoji']} ~~{info['name']}~~ — _désactivé (0%)_")
+
+    lines += [
+        "",
+        "*3. Calcul de la note finale*",
+        "_Score = somme pondérée de chaque critère._",
+        "",
+        "_Exemple concret :_",
+        "  Spread = 80/100 (poids 15%)",
+        "  Liquidité = 60/100 (poids 15%)",
+        "  Conviction = 90/100 (poids 20%)",
+        "  Forme trader = 70/100 (poids 20%)",
+        "  Timing = 100/100 (poids 15%)",
+        "  Consensus = 40/100 (poids 15%)",
+        "",
+        "  Score = 80×15% + 60×15% + 90×20%",
+        "          + 70×20% + 100×15% + 40×15%",
+        "  *Score = 74/100*",
+        "",
+        "*4. Décision*",
+        f"  Si score >= seuil (*{float(getattr(us, 'min_signal_score', 40)):.0f}*) → copié",
+        f"  Si score < seuil → rejeté",
+        "",
+        "*5. Filtres supplémentaires*",
+        "_Même si le score passe, les filtres custom_",
+        "_peuvent encore bloquer le trade (conviction_",
+        "_trop faible, prix trop volatile, etc.)._",
+    ]
+
+    text = "\n".join(lines)
+
+    keyboard = [
+        [InlineKeyboardButton("🎯 Modifier les critères", callback_data="sc_criteria")],
+        [InlineKeyboardButton("🔧 Filtres custom", callback_data="sc_filters")],
+        [InlineKeyboardButton("⬅️ Retour aux signaux", callback_data="sc_back")],
+    ]
+
+    await query.edit_message_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_custom_filters_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Affiche tous les filtres custom activables/réglables."""
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+
+    on = "✅"
+    off = "❌"
+
+    lines = [
+        f"🔧 *FILTRES PERSONNALISÉS*\n{SEP}\n",
+        "_Ces filtres s'appliquent EN PLUS du score._",
+        "_Un signal peut avoir 80/100 mais être bloqué_",
+        "_par un filtre (ex: conviction trop basse)._\n",
+        "_Cliquez sur un filtre pour le configurer._\n",
+    ]
+
+    keyboard = []
+
+    for fk in CUSTOM_FILTER_ORDER:
+        finfo = CUSTOM_FILTERS[fk]
+        val = getattr(us, finfo["field"], None)
+
+        if finfo["type"] == "toggle":
+            is_on = bool(val) if val is not None else False
+            status = on if is_on else off
+            lines.append(f"{finfo['emoji']} *{finfo['name']}* {status}")
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{finfo['emoji']} {finfo['name']} {status}",
+                    callback_data=f"sc_fd:{fk}",
+                ),
+            ])
+        else:
+            unit = finfo.get("unit", "")
+            if val is not None:
+                if isinstance(val, float) and val == int(val):
+                    val_str = f"{int(val)}{unit}"
+                else:
+                    val_str = f"{val}{unit}"
+            else:
+                val_str = "—"
+            lines.append(f"{finfo['emoji']} *{finfo['name']}* : *{val_str}*")
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{finfo['emoji']} {finfo['name']} : {val_str}",
+                    callback_data=f"sc_fd:{fk}",
+                ),
+            ])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Retour aux signaux", callback_data="sc_back")])
+
+    text = "\n".join(lines)
+
+    await query.edit_message_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_custom_filter_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Affiche le détail d'un filtre custom avec explication + réglages."""
+    query = update.callback_query
+    filter_key = query.data.replace("sc_fd:", "")
+
+    finfo = CUSTOM_FILTERS.get(filter_key)
+    if not finfo:
+        await query.answer("❌ Filtre inconnu", show_alert=True)
+        return
+
+    await query.answer()
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+
+    val = getattr(us, finfo["field"], None)
+    on = "✅"
+    off = "❌"
+
+    lines = [
+        f"{finfo['emoji']} *{finfo['name'].upper()}*\n{SEP}\n",
+        f"{finfo['description']}\n",
+    ]
+
+    keyboard = []
+
+    if finfo["type"] == "toggle":
+        is_on = bool(val) if val is not None else False
+        lines.append(f"*État :* {on if is_on else off} {'Activé' if is_on else 'Désactivé'}")
+        toggle_label = "❌ Désactiver" if is_on else "✅ Activer"
+        keyboard.append([
+            InlineKeyboardButton(toggle_label, callback_data=f"sc_ft:{filter_key}"),
+        ])
+    else:
+        unit = finfo.get("unit", "")
+        if val is not None:
+            if isinstance(val, float) and val == int(val):
+                val_str = f"{int(val)}{unit}"
+            else:
+                val_str = f"{val}{unit}"
+        else:
+            val_str = "—"
+        lines.append(f"*Valeur actuelle :* {val_str}\n")
+        lines.append("_Choisissez une nouvelle valeur :_")
+
+        # Preset buttons in rows of 3
+        presets = finfo.get("presets", [])
+        preset_btns = []
+        for label, pval in presets:
+            marker = "✓ " if val is not None and abs(float(pval) - float(val)) < 0.01 else ""
+            preset_btns.append(
+                InlineKeyboardButton(
+                    f"{marker}{label}",
+                    callback_data=f"sc_fv:{filter_key}:{pval}",
+                )
+            )
+        for i in range(0, len(preset_btns), 3):
+            keyboard.append(preset_btns[i:i+3])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Retour aux filtres", callback_data="sc_filters")])
+
+    text = "\n".join(lines)
+
+    await query.edit_message_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def toggle_custom_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle un filtre booléen ON/OFF."""
+    query = update.callback_query
+    filter_key = query.data.replace("sc_ft:", "")
+
+    finfo = CUSTOM_FILTERS.get(filter_key)
+    if not finfo or finfo["type"] != "toggle":
+        await query.answer("❌ Filtre inconnu", show_alert=True)
+        return
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        current = bool(getattr(us, finfo["field"], False))
+        setattr(us, finfo["field"], not current)
+        await session.commit()
+        new_state = not current
+
+    state_text = "activé" if new_state else "désactivé"
+    await query.answer(f"✅ {finfo['name']} {state_text}", show_alert=False)
+
+    # Refresh detail
+    query.data = f"sc_fd:{filter_key}"
+    await show_custom_filter_detail(update, context)
+
+
+async def set_custom_filter_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the value of a custom filter."""
+    query = update.callback_query
+    parts = query.data.replace("sc_fv:", "").split(":", 1)
+    if len(parts) != 2:
+        await query.answer("❌ Format invalide", show_alert=True)
+        return
+
+    filter_key, raw_val = parts
+    finfo = CUSTOM_FILTERS.get(filter_key)
+    if not finfo:
+        await query.answer("❌ Filtre inconnu", show_alert=True)
+        return
+
+    try:
+        value = float(raw_val)
+        if value == int(value):
+            value = int(value)
+    except ValueError:
+        await query.answer("❌ Valeur invalide", show_alert=True)
+        return
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            return
+        us = await get_or_create_settings(session, user)
+        setattr(us, finfo["field"], value)
+        await session.commit()
+
+    unit = finfo.get("unit", "")
+    await query.answer(f"✅ {finfo['name']} → {value}{unit}", show_alert=False)
+
+    # Refresh detail
+    query.data = f"sc_fd:{filter_key}"
+    await show_custom_filter_detail(update, context)
 
 
 async def scoring_back_to_signals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

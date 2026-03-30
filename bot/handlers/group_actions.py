@@ -774,6 +774,11 @@ async def _scoring_group_interceptor(
         toggle_criterion,
         set_criterion_weight,
         scoring_back_to_signals,
+        show_formula_explanation,
+        show_custom_filters_list,
+        show_custom_filter_detail,
+        toggle_custom_filter,
+        set_custom_filter_value,
     )
 
     data = (update.callback_query.data or "").strip()
@@ -791,6 +796,16 @@ async def _scoring_group_interceptor(
             await toggle_criterion(update, context)
         elif data.startswith("sc_weight:"):
             await set_criterion_weight(update, context)
+        elif data == "sc_formula":
+            await show_formula_explanation(update, context)
+        elif data == "sc_filters":
+            await show_custom_filters_list(update, context)
+        elif data.startswith("sc_fd:"):
+            await show_custom_filter_detail(update, context)
+        elif data.startswith("sc_ft:"):
+            await toggle_custom_filter(update, context)
+        elif data.startswith("sc_fv:"):
+            await set_custom_filter_value(update, context)
         elif data == "sc_back":
             await scoring_back_to_signals(update, context)
         else:
