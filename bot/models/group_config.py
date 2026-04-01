@@ -30,12 +30,16 @@ class GroupConfig(Base):
     group_title: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     is_forum: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    # Auto-created topic thread IDs
+    # Auto-created topic thread IDs — Copy wallet
     topic_signals_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     topic_traders_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     topic_portfolio_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     topic_alerts_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     topic_admin_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Auto-created topic thread IDs — Strategies
+    topic_strategies_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    topic_strategies_perf_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -53,6 +57,8 @@ class GroupConfig(Base):
             "portfolio": self.topic_portfolio_id,
             "alerts": self.topic_alerts_id,
             "admin": self.topic_admin_id,
+            "strategies": self.topic_strategies_id,
+            "strategies_perf": self.topic_strategies_perf_id,
         }
 
     @property
@@ -63,6 +69,8 @@ class GroupConfig(Base):
             self.topic_portfolio_id,
             self.topic_alerts_id,
             self.topic_admin_id,
+            self.topic_strategies_id,
+            self.topic_strategies_perf_id,
         ])
 
     def __repr__(self) -> str:

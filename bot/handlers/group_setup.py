@@ -27,11 +27,13 @@ logger = logging.getLogger(__name__)
 # 0x6FB9F0 (blue), 0xFFD67E (yellow), 0xCB86DB (purple),
 # 0x8EEE98 (green), 0xFF93B2 (pink), 0xFB6F5F (red)
 TOPICS_TO_CREATE = [
-    {"name": "📊 Signals",   "icon_color": 0x6FB9F0},  # Blue
-    {"name": "👤 Traders",   "icon_color": 0x8EEE98},  # Green
-    {"name": "💼 Portfolio",  "icon_color": 0xFFD67E},  # Yellow
-    {"name": "🚨 Alerts",    "icon_color": 0xFB6F5F},  # Red
-    {"name": "⚙️ Admin",     "icon_color": 0xCB86DB},  # Purple
+    {"name": "📊 Signals",        "icon_color": 0x6FB9F0},  # Blue
+    {"name": "👤 Traders",        "icon_color": 0x8EEE98},  # Green
+    {"name": "💼 Portfolio",       "icon_color": 0xFFD67E},  # Yellow
+    {"name": "🚨 Alerts",         "icon_color": 0xFB6F5F},  # Red
+    {"name": "⚙️ Admin",          "icon_color": 0xCB86DB},  # Purple
+    {"name": "📊 Stratégies",     "icon_color": 0xFF93B2},  # Pink
+    {"name": "📈 Perf Stratégies", "icon_color": 0x8EEE98},  # Green
 ]
 
 # Map topic name prefix to DB field
@@ -41,6 +43,8 @@ TOPIC_FIELD_MAP = {
     "💼 Portfolio": "topic_portfolio_id",
     "🚨 Alerts": "topic_alerts_id",
     "⚙️ Admin": "topic_admin_id",
+    "📊 Stratégies": "topic_strategies_id",
+    "📈 Perf Stratégies": "topic_strategies_perf_id",
 }
 
 
@@ -256,6 +260,8 @@ async def _auto_setup_topics(
         config.topic_portfolio_id = created_topics.get("topic_portfolio_id")
         config.topic_alerts_id = created_topics.get("topic_alerts_id")
         config.topic_admin_id = created_topics.get("topic_admin_id")
+        config.topic_strategies_id = created_topics.get("topic_strategies_id")
+        config.topic_strategies_perf_id = created_topics.get("topic_strategies_perf_id")
         config.setup_complete = config.all_topics_created
         config.is_active = True
 
@@ -420,6 +426,43 @@ async def _auto_setup_topics(
         except Exception:
             pass
 
+    # Strategy topics welcome messages
+    if created_topics.get("topic_strategies_id"):
+        try:
+            await bot.send_message(
+                chat_id=group_id,
+                message_thread_id=created_topics["topic_strategies_id"],
+                text=(
+                    "📊 *Stratégies Topic*\n\n"
+                    "Signaux et exécutions des stratégies :\n"
+                    "• Signal reçu + montant exécuté\n"
+                    "• Fee rate et priorité\n"
+                    "• Statut (FILLED / FAILED)\n"
+                    "• Side (YES/NO) et marché"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
+    if created_topics.get("topic_strategies_perf_id"):
+        try:
+            await bot.send_message(
+                chat_id=group_id,
+                message_thread_id=created_topics["topic_strategies_perf_id"],
+                text=(
+                    "📈 *Perf Stratégies Topic*\n\n"
+                    "Performance et résolutions :\n"
+                    "• Marchés résolus (WON/LOST)\n"
+                    "• P&L par trade\n"
+                    "• Recap quotidien\n"
+                    "• Fees de performance (5% PnL+)"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
     # Final success message
     if progress_msg:
         try:
@@ -431,7 +474,9 @@ async def _auto_setup_topics(
                 f"👤 Traders — analytics traders\n"
                 f"💼 Portfolio — vue portfolio\n"
                 f"🚨 Alerts — alertes SL/TP\n"
-                f"⚙️ Admin — système\n\n"
+                f"⚙️ Admin — système\n"
+                f"📊 Stratégies — signaux stratégies\n"
+                f"📈 Perf Stratégies — résolutions\n\n"
                 f"_Le bot est prêt ! Les commandes privées restent en DM._",
                 parse_mode="Markdown",
             )

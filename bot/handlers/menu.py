@@ -83,6 +83,10 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
             )]
         )
 
+    # Strategy subscriptions count
+    strat_count = len(user.subscriptions) if user.subscriptions else 0
+    active_strat = sum(1 for s in (user.subscriptions or []) if s.is_active)
+
     keyboard.extend([
         [
             InlineKeyboardButton("👛 Wallets", callback_data="menu_balance"),
@@ -103,6 +107,17 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
         [
             InlineKeyboardButton("🔍 Scanner traders", callback_data="menu_scanner"),
             InlineKeyboardButton("📈 Analytics V3", callback_data="v3_analytics"),
+        ],
+        # ── Strategy section ──
+        [
+            InlineKeyboardButton(
+                f"📊 Stratégies ({active_strat} active{'s' if active_strat != 1 else ''})",
+                callback_data="menu_strategies",
+            ),
+            InlineKeyboardButton("📈 Statut strat.", callback_data="strat_status"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ Param. stratégie", callback_data="strat_settings"),
         ],
         [
             InlineKeyboardButton("📊 Mon groupe", callback_data="menu_mygroup"),

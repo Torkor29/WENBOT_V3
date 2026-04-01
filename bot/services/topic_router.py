@@ -1,6 +1,6 @@
 """TopicRouter — routes bot messages to the correct Telegram Forum Group topic.
 
-Supports 5 topics: Signals, Traders, Portfolio, Alerts, Admin.
+Supports 7 topics: Signals, Traders, Portfolio, Alerts, Admin, Strategies, Perf Strategies.
 
 Multi-tenant architecture:
 - Each subscriber can have their own Forum Group (linked via GroupConfig.user_id).
@@ -41,6 +41,8 @@ class TopicRouter:
             "portfolio": None,
             "alerts": None,
             "admin": None,
+            "strategies": None,
+            "strategies_perf": None,
         }
         self._enabled = False
 
@@ -54,6 +56,8 @@ class TopicRouter:
                     "portfolio": settings.topic_portfolio_id or None,
                     "alerts": settings.topic_alerts_id or None,
                     "admin": settings.topic_admin_id or None,
+                    "strategies": None,
+                    "strategies_perf": None,
                 }
                 self._enabled = bool(any(self._topics.values()))
             except (ValueError, TypeError):
@@ -236,6 +240,16 @@ class TopicRouter:
     async def send_admin(self, text: str) -> Optional[Message]:
         """Post system info to the ⚙️ Admin topic."""
         return await self._send_to_topic("admin", text)
+
+    async def send_strategy_signal(
+        self, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None
+    ) -> Optional[Message]:
+        """Post strategy signal/execution to the 📊 Strategies topic."""
+        return await self._send_to_topic("strategies", text, reply_markup=reply_markup)
+
+    async def send_strategy_perf(self, text: str) -> Optional[Message]:
+        """Post strategy performance/resolution to the 📈 Perf Strategies topic."""
+        return await self._send_to_topic("strategies_perf", text)
 
     # ── Smart routing (DM + Group based on user preference) ───────
 

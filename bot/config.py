@@ -56,6 +56,21 @@ class Settings(BaseSettings):
     # URL d'une bannière (logo) pour le message d'accueil Telegram
     welcome_banner_url: str = ""
 
+    # ── Strategy engine (fusion with Dirto copybot) ──
+    strategy_redis_url: str = "redis://redis:6379"
+    strategy_execution_delay_ms: int = Field(default=100, ge=0, le=5000)
+    strategy_resolver_interval: int = Field(default=30, ge=5, le=300)
+    strategy_perf_fee_rate: float = Field(default=0.05, ge=0, le=0.5)
+    strategy_min_trade_fee_rate: float = Field(default=0.01, ge=0, le=0.5)
+    strategy_max_trade_fee_rate: float = Field(default=0.20, ge=0, le=0.5)
+    # MATIC gas refill for strategy wallets
+    strategy_matic_refill_amount: float = Field(default=0.1, ge=0)
+    strategy_matic_min_balance: float = Field(default=0.01, ge=0)
+    strategy_matic_max_refills: int = Field(default=3, ge=0, le=100)
+    strategy_matic_max_total: float = Field(default=0.3, ge=0)
+    strategy_matic_cooldown_seconds: int = Field(default=86400, ge=0)
+    strategy_min_usdc_for_refill: float = Field(default=2.0, ge=0)
+
     # V3 — Telegram Group with Topics
     # Create a Forum-enabled group, add the bot as admin, then fill these IDs.
     # Leave empty to keep DM-only mode (backwards compatible).

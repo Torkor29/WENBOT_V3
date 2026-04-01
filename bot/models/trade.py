@@ -51,9 +51,23 @@ class Trade(Base):
     net_amount_usdc: Mapped[float] = mapped_column(Float, nullable=False)
     shares: Mapped[float] = mapped_column(Float, default=0.0)
 
-    # Master trade reference
+    # Master trade reference (copy wallet trades)
     master_wallet: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     master_trade_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Strategy trade fields (NULL = copy wallet trade, non-NULL = strategy trade)
+    strategy_id: Mapped[Optional[str]] = mapped_column(
+        String(64), ForeignKey("strategies.id"), nullable=True, index=True
+    )
+    result: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)  # WON/LOST
+    pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    strategy_fee_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    strategy_fee_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    strategy_fee_tx_hash: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    execution_priority: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Status
     status: Mapped[TradeStatus] = mapped_column(
@@ -85,6 +99,9 @@ class Trade(Base):
     fee_record: Mapped[Optional["FeeRecord"]] = relationship(
         "FeeRecord", back_populates="trade", uselist=False, lazy="selectin"
     )
+    strategy: Mapped[Optional["Strategy"]] = relationship(
+        "Strategy", lazy="selectin"
+    )
 
     def __repr__(self) -> str:
         return (
@@ -95,3 +112,4 @@ class Trade(Base):
 
 from .user import User  # noqa: E402, F401
 from .fee import FeeRecord  # noqa: E402, F401
+from .strategy import Strategy  # noqa: E402, F401

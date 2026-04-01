@@ -22,6 +22,9 @@ from bot.handlers.group_setup import get_group_setup_handler
 from bot.handlers.mygroup import get_mygroup_handlers
 from bot.handlers.group_actions import get_group_action_handlers
 from bot.handlers.signals_menu import get_signals_handlers
+from bot.handlers.strategies_menu import get_strategies_menu_handler, get_strategy_wallet_handler
+from bot.handlers.strategy_status import get_strategy_status_handlers
+from bot.handlers.strategy_settings import get_strategy_settings_handlers
 from bot.services.monitor import MultiMasterMonitor
 from bot.services.clob_ws_monitor import ClobWsMonitor, RawWsEvent
 from bot.services.copytrade import CopyTradeEngine
@@ -31,7 +34,15 @@ from bot.services.scheduler import (
     cleanup_expired_otps,
     health_check,
     settle_trades,
+    reset_strategy_daily_counters,
 )
+
+# Strategy engine imports
+from bot.services.strategy_listener import StrategyListener
+from bot.services.strategy_executor import StrategyExecutor
+from bot.services.strategy_resolver import StrategyResolver
+from bot.services.strategy_gas_manager import StrategyGasManager
+from bot.services.perf_fee_service import collect_daily_perf_fees
 
 # V3 — Smart Analysis imports
 from bot.services.topic_router import TopicRouter
@@ -93,6 +104,14 @@ def build_application() -> Application:
 
     # /mygroup — show / manage user's linked group
     for handler in get_mygroup_handlers():
+        app.add_handler(handler)
+
+    # ── Strategy handlers (fusion with Dirto copybot) ──
+    app.add_handler(get_strategies_menu_handler())
+    app.add_handler(get_strategy_wallet_handler())
+    for handler in get_strategy_status_handlers():
+        app.add_handler(handler)
+    for handler in get_strategy_settings_handlers():
         app.add_handler(handler)
 
     return app
@@ -253,6 +272,21 @@ def setup_scheduler(
             id="daily_portfolio_report",
         )
 
+    # ── Strategy scheduled jobs ──────────────────────────────────
+    # Reset strategy daily trade counters at midnight
+    scheduler.add_job(
+        reset_strategy_daily_counters,
+        "cron", hour=0, minute=0,
+        id="reset_strategy_daily_counters",
+    )
+
+    # Collect daily performance fees at midnight UTC
+    scheduler.add_job(
+        lambda: collect_daily_perf_fees(bot=bot, topic_router=topic_router),
+        "cron", hour=0, minute=1,  # 1 min after midnight to avoid race with counter reset
+        id="strategy_perf_fees",
+    )
+
     return scheduler
 
 
@@ -333,6 +367,29 @@ async def main() -> None:
 
     position_manager.set_exit_callback(on_position_exit)
 
+    # ── Strategy engine services (fusion with Dirto) ─────────────
+    from bot.services.web3_client import polygon_client as web3_client
+
+    strategy_gas_manager = StrategyGasManager(web3_client=web3_client)
+
+    strategy_executor = StrategyExecutor(
+        bot=app.bot,
+        topic_router=topic_router,
+        gas_manager=strategy_gas_manager,
+        polymarket_client=polymarket_client,
+        web3_client=web3_client,
+    )
+
+    strategy_listener = StrategyListener(
+        on_signal=strategy_executor.handle_signal,
+    )
+
+    strategy_resolver = StrategyResolver(
+        bot=app.bot,
+        topic_router=topic_router,
+        polymarket_client=polymarket_client,
+    )
+
     # Monitor Data API (positions) — poll every N seconds
     monitor = MultiMasterMonitor(
         poll_interval=settings.monitor_poll_interval,
@@ -405,6 +462,16 @@ async def main() -> None:
     await position_manager.start()
     logger.info("Position manager started (checking every 15s).")
 
+    # ── Strategy engine: start listener + resolver ──
+    try:
+        await strategy_listener.start()
+        logger.info("Strategy listener started (Redis signals:*).")
+    except Exception as e:
+        logger.warning("Strategy listener failed to start (Redis unavailable?): %s", e)
+
+    await strategy_resolver.start()
+    logger.info("Strategy resolver started (polling every %ds).", settings.strategy_resolver_interval)
+
     # V3: Startup notification
     if topic_router.is_enabled:
         await topic_router.send_admin(
@@ -415,7 +482,9 @@ async def main() -> None:
             "Trader Tracker: ✅\n"
             "Position Manager: ✅\n"
             "Portfolio Manager: ✅\n"
-            "Smart Filter: ✅"
+            "Smart Filter: ✅\n"
+            f"Strategy Listener: {'✅' if strategy_listener.is_running else '⚠️ Off'}\n"
+            f"Strategy Resolver: {'✅' if strategy_resolver.is_running else '⚠️ Off'}"
         )
     logger.info("V3 Smart Analysis services initialized.")
 
@@ -447,6 +516,8 @@ async def main() -> None:
         if dashboard_server:
             dashboard_server.should_exit = True
         scheduler.shutdown(wait=False)
+        await strategy_listener.stop()
+        await strategy_resolver.stop()
         await position_manager.stop()
         await monitor.stop()
         await clob_ws_monitor.stop()

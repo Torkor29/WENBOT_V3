@@ -170,6 +170,35 @@ async def get_all_followed_wallets(session: AsyncSession) -> set[str]:
     return wallets
 
 
+async def get_or_create_strategy_settings(
+    session: AsyncSession, user: User
+) -> "StrategyUserSettings":
+    """Get strategy user settings, creating defaults if missing."""
+    from bot.models.strategy_user_settings import StrategyUserSettings
+
+    if user.strategy_settings:
+        return user.strategy_settings
+    sus = StrategyUserSettings(user_id=user.id)
+    session.add(sus)
+    await session.commit()
+    await session.refresh(user)
+    return user.strategy_settings
+
+
+async def get_user_active_subscriptions(
+    session: AsyncSession, user_id: int
+) -> list:
+    """Get all active strategy subscriptions for a user."""
+    from bot.models.subscription import Subscription
+    result = await session.execute(
+        select(Subscription).where(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,  # noqa: E712
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def get_admin_stats(session: AsyncSession) -> dict:
     """Get aggregate stats for admin panel."""
     from sqlalchemy import func

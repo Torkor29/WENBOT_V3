@@ -103,6 +103,23 @@ async def init_db() -> None:
             "ALTER TABLE user_settings ADD COLUMN scoring_criteria TEXT",
             # Multi-tenant: link each group config to its owner user
             "ALTER TABLE group_config ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
+            # ── Strategy fusion migrations ──
+            # User: strategy-dedicated wallet
+            "ALTER TABLE users ADD COLUMN strategy_wallet_address VARCHAR(255)",
+            "ALTER TABLE users ADD COLUMN encrypted_strategy_private_key BLOB",
+            "ALTER TABLE users ADD COLUMN strategy_wallet_auto_created BOOLEAN DEFAULT false",
+            # Trade: strategy fields
+            "ALTER TABLE trades ADD COLUMN strategy_id VARCHAR(64) REFERENCES strategies(id)",
+            "ALTER TABLE trades ADD COLUMN result VARCHAR(8)",
+            "ALTER TABLE trades ADD COLUMN pnl FLOAT",
+            "ALTER TABLE trades ADD COLUMN resolved_at TIMESTAMP",
+            "ALTER TABLE trades ADD COLUMN strategy_fee_rate FLOAT",
+            "ALTER TABLE trades ADD COLUMN strategy_fee_amount FLOAT",
+            "ALTER TABLE trades ADD COLUMN strategy_fee_tx_hash VARCHAR(128)",
+            "ALTER TABLE trades ADD COLUMN execution_priority INTEGER",
+            # GroupConfig: strategy topic IDs
+            "ALTER TABLE group_config ADD COLUMN topic_strategies_id INTEGER",
+            "ALTER TABLE group_config ADD COLUMN topic_strategies_perf_id INTEGER",
         ]
         for stmt in migrations:
             await _safe_add_column(conn, stmt)

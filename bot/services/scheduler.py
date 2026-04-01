@@ -214,6 +214,17 @@ async def _notify_settlement(bot, session, trade, won, pnl, payout, topic_router
         logger.error(f"Settlement notification error: {e}")
 
 
+async def reset_strategy_daily_counters() -> None:
+    """Reset strategy daily trade counters. Runs at midnight UTC."""
+    from bot.models.strategy_user_settings import StrategyUserSettings
+    async with async_session() as session:
+        await session.execute(
+            update(StrategyUserSettings).values(trades_today=0)
+        )
+        await session.commit()
+    logger.info("Strategy daily trade counters reset")
+
+
 async def health_check() -> None:
     """Periodic health check — verify DB and services. Runs every 5 minutes."""
     try:

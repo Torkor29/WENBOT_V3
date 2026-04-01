@@ -14,3 +14,10 @@ from .market_intel import MarketIntel  # noqa: F401
 from .active_position import ActivePosition  # noqa: F401
 from .trader_market_history import TraderMarketHistory  # noqa: F401
 from .group_config import GroupConfig  # noqa: F401
+
+# Strategy models (fusion with Dirto copybot)
+from .strategy import Strategy, StrategyStatus, StrategyVisibility  # noqa: F401
+from .subscription import Subscription  # noqa: F401
+from .strategy_signal import StrategySignal  # noqa: F401
+from .daily_performance_fee import DailyPerformanceFee, PerfFeeStatus  # noqa: F401
+from .strategy_user_settings import StrategyUserSettings  # noqa: F401

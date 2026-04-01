@@ -40,6 +40,11 @@ class User(Base):
     solana_wallet_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     encrypted_solana_key: Mapped[Optional[bytes]] = mapped_column(nullable=True)
 
+    # Strategy-dedicated wallet (separate from copy wallet)
+    strategy_wallet_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    encrypted_strategy_private_key: Mapped[Optional[bytes]] = mapped_column(nullable=True)
+    strategy_wallet_auto_created: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -72,6 +77,12 @@ class User(Base):
     fees: Mapped[list["FeeRecord"]] = relationship(
         "FeeRecord", back_populates="user", lazy="selectin"
     )
+    subscriptions: Mapped[list["Subscription"]] = relationship(
+        "Subscription", back_populates="user", lazy="selectin"
+    )
+    strategy_settings: Mapped[Optional["StrategyUserSettings"]] = relationship(
+        "StrategyUserSettings", back_populates="user", uselist=False, lazy="selectin"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} tg={self.telegram_id} role={self.role.value}>"
@@ -82,3 +93,5 @@ from .settings import UserSettings  # noqa: E402, F401
 from .trade import Trade  # noqa: E402, F401
 from .fee import FeeRecord  # noqa: E402, F401
 from .user_wallet import UserWallet  # noqa: E402, F401
+from .subscription import Subscription  # noqa: E402, F401
+from .strategy_user_settings import StrategyUserSettings  # noqa: E402, F401
