@@ -394,5 +394,53 @@ class PolygonClient:
             return TransferResult(success=False, error=str(e))
 
 
+    async def transfer_matic(
+        self,
+        private_key: str,
+        to_address: str,
+        amount_matic: float,
+    ) -> str:
+        """Transfer native MATIC (POL) from admin wallet to a user wallet.
+
+        Returns tx_hash on success, raises on failure.
+        """
+        w3 = self._get_web3()
+        from eth_account import Account
+        acct = Account.from_key(private_key)
+        from_addr = w3.to_checksum_address(acct.address)
+        to_addr = w3.to_checksum_address(to_address)
+        amount_wei = w3.to_wei(amount_matic, "ether")
+
+        def _send():
+            nonce = w3.eth.get_transaction_count(from_addr)
+            tx = {
+                "from": from_addr,
+                "to": to_addr,
+                "value": amount_wei,
+                "nonce": nonce,
+                "gas": 21_000,
+                "maxFeePerGas": w3.eth.gas_price * 2,
+                "maxPriorityFeePerGas": w3.to_wei(30, "gwei"),
+                "chainId": 137,
+            }
+            signed = w3.eth.account.sign_transaction(tx, private_key)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            return tx_hash.hex(), receipt
+
+        tx_hash_hex, receipt = await asyncio.wait_for(
+            asyncio.to_thread(_send), timeout=90
+        )
+
+        if receipt["status"] != 1:
+            raise RuntimeError(f"MATIC transfer reverted: tx={tx_hash_hex}")
+
+        logger.info(
+            "MATIC transfer: %.4f MATIC → %s tx=%s",
+            amount_matic, to_addr[:10], tx_hash_hex,
+        )
+        return tx_hash_hex
+
+
 # Singleton
 polygon_client = PolygonClient()

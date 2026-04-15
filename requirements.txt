@@ -18,6 +18,7 @@ redis[hiredis]==5.2.1
 # Blockchain
 web3==7.6.0
 solana==0.35.0
+solders==0.21.0
 
 # Polymarket
 py-clob-client==0.18.0

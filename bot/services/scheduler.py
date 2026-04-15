@@ -225,6 +225,148 @@ async def reset_strategy_daily_counters() -> None:
     logger.info("Strategy daily trade counters reset")
 
 
+async def snapshot_market_prices(polymarket_client=None) -> None:
+    """Snapshot prices for active markets and compute momentum.
+
+    Runs every hour. Only tracks markets with open positions (copy + strategy).
+    Shifts price history: current → 1h_ago, 1h_ago → 6h (every 6th call),
+    6h_ago → 24h (every 24th call).
+    """
+    from bot.models.market_intel import MarketIntel as MarketIntelModel
+
+    try:
+        async with async_session() as session:
+            # 1. Find distinct market_ids with open positions
+            #    Copy trades: not settled, BUY, FILLED
+            #    Strategy trades: not resolved, FILLED/PENDING
+            result = await session.execute(
+                select(Trade.market_id).where(
+                    Trade.side == TradeSide.BUY,
+                    Trade.status == TradeStatus.FILLED,
+                    Trade.is_settled == False,  # noqa: E712
+                ).distinct()
+            )
+            copy_markets = {r[0] for r in result.all()}
+
+            result = await session.execute(
+                select(Trade.market_id).where(
+                    Trade.strategy_id.isnot(None),
+                    Trade.resolved_at.is_(None),
+                    Trade.status.in_([TradeStatus.FILLED, TradeStatus.PENDING]),
+                ).distinct()
+            )
+            strategy_markets = {r[0] for r in result.all()}
+
+            active_markets = copy_markets | strategy_markets
+
+            if not active_markets:
+                return
+
+            logger.debug(
+                "Price snapshot: %d active market(s) to track", len(active_markets)
+            )
+
+            # 2. For each market, fetch current price and update history
+            updated = 0
+            for market_id in active_markets:
+                try:
+                    # Fetch current price from Gamma API
+                    current_price = await _fetch_market_price(
+                        market_id, polymarket_client
+                    )
+                    if current_price is None:
+                        continue
+
+                    # Get or create MarketIntel row
+                    intel = (
+                        await session.execute(
+                            select(MarketIntelModel).where(
+                                MarketIntelModel.market_id == market_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+
+                    if not intel:
+                        intel = MarketIntelModel(market_id=market_id)
+                        session.add(intel)
+
+                    # Shift price history
+                    old_1h = intel.price_1h_ago
+                    old_6h = intel.price_6h_ago
+
+                    # 24h_ago gets the 6h value (called every hour,
+                    # so after 24 calls the oldest 6h snapshot is ~24h old)
+                    # Simpler approach: only overwrite if None or every 6th/24th hour
+                    # For simplicity, always shift down:
+                    # price_24h_ago ← price_6h_ago (refreshed roughly every 6h)
+                    # price_6h_ago  ← price_1h_ago (refreshed roughly every 6h)
+                    # price_1h_ago  ← price_current (refreshed every hour)
+
+                    # Only shift 6h/24h every 6 calls (≈ every 6 hours)
+                    # We use the hour of the day as a simple modulo trigger
+                    hour_now = datetime.utcnow().hour
+                    if hour_now % 6 == 0:
+                        intel.price_24h_ago = old_6h
+                        intel.price_6h_ago = old_1h
+
+                    intel.price_1h_ago = intel.price_current
+                    intel.price_current = current_price
+
+                    # Compute momentum_1h
+                    if intel.price_1h_ago and intel.price_1h_ago > 0:
+                        intel.momentum_1h = round(
+                            (current_price - intel.price_1h_ago)
+                            / intel.price_1h_ago
+                            * 100,
+                            2,
+                        )
+                    else:
+                        intel.momentum_1h = None
+
+                    intel.last_updated = datetime.utcnow()
+                    updated += 1
+
+                except Exception:
+                    logger.debug("Price snapshot failed for %s", market_id[:16])
+
+            if updated:
+                await session.commit()
+                logger.info(
+                    "Price snapshot: updated %d/%d active markets",
+                    updated, len(active_markets),
+                )
+
+    except Exception:
+        logger.exception("Error in snapshot_market_prices")
+
+
+async def _fetch_market_price(market_id: str, polymarket_client=None) -> float | None:
+    """Fetch current YES price for a market from Gamma API."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://gamma-api.polymarket.com/markets",
+                params={"condition_id": market_id, "limit": 1},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if not data:
+                return None
+
+            market = data[0]
+            outcome_prices_str = market.get("outcomePrices", "")
+            if outcome_prices_str:
+                prices = [float(p.strip()) for p in outcome_prices_str.split(",")]
+                if prices:
+                    return prices[0]
+    except Exception:
+        pass
+    return None
+
+
 async def health_check() -> None:
     """Periodic health check — verify DB and services. Runs every 5 minutes."""
     try:

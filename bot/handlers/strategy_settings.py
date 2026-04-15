@@ -82,7 +82,10 @@ async def strat_settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
             "🆕 Créer wallet stratégie", callback_data="strat_create_wallet",
         )])
 
-    keyboard.append([InlineKeyboardButton("⬅️ Menu", callback_data="menu_back")])
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Stratégies", callback_data="hub_strat"),
+        InlineKeyboardButton("🏠 Accueil", callback_data="hub_home"),
+    ])
 
     await query.edit_message_text(
         text, parse_mode="Markdown",
@@ -245,4 +248,5 @@ def get_strategy_settings_handlers() -> list:
     return [
         CallbackQueryHandler(strat_settings_menu, pattern="^strat_settings$"),
         CallbackQueryHandler(strat_set_handler, pattern=r"^strat_set:"),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, strat_set_input),
     ]

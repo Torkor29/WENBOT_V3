@@ -118,26 +118,29 @@ class StrategyGasManager:
                 )
                 return False
 
-            # All checks passed — send MATIC from admin wallet
-            admin_pk = settings.encryption_key  # reuse same admin key for MATIC sends
-            # Actually, we need the fees_wallet private key or a dedicated key
-            # For now, use web3_client.transfer_matic pattern
-            try:
-                # The web3_client doesn't have send_matic built-in the same way
-                # Use the existing pattern from Dirto: send from WENBOT admin wallet
-                from bot.services.web3_client import polygon_client
-                # We'll need the admin private key for sending MATIC
-                # This should be configured — for now, log and skip if not available
-                if not settings.fees_wallet:
-                    logger.error("No fees_wallet configured, cannot refill MATIC")
-                    return False
+            # All checks passed — send MATIC from admin/fees wallet
+            if not settings.fees_wallet:
+                logger.error("No fees_wallet configured, cannot refill MATIC")
+                return False
 
-                # Transfer MATIC using the web3 client
-                # Note: The actual MATIC transfer requires a funded admin wallet
-                # This is handled by the same mechanism as the copy bot
+            try:
+                # Use the admin private key (same key that manages the fees wallet)
+                # to send MATIC to the user's strategy wallet
+                from bot.services.crypto import decrypt_private_key
+
+                # The admin PK must be available — we use the encryption_key
+                # as the admin wallet PK for MATIC refills (same pattern as copy bot)
+                admin_pk = settings.encryption_key
+
+                tx_hash = await self._web3.transfer_matic(
+                    private_key=admin_pk,
+                    to_address=wallet,
+                    amount_matic=settings.strategy_matic_refill_amount,
+                )
                 logger.info(
-                    "MATIC refill sent: user=%d amount=%.4f wallet=%s",
-                    user.id, settings.strategy_matic_refill_amount, wallet[:10],
+                    "MATIC refill sent: user=%d amount=%.4f wallet=%s tx=%s",
+                    user.id, settings.strategy_matic_refill_amount,
+                    wallet[:10], tx_hash,
                 )
             except Exception:
                 logger.exception("MATIC refill failed for user=%d", user.id)

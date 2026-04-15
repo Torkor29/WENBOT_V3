@@ -108,6 +108,66 @@ docker compose up --build -d
 
 
 Pour voir les logs du VPS :
+
+```bash
 cd /opt/wenpolymarket
 docker compose ps
 docker logs -n 80 polybot
+```
+
+---
+
+### 4. Template `.env` complet pour le VPS (tout pour faire tourner le bot)
+
+Copie ce bloc dans ton `.env` sur le VPS, puis remplace les valeurs entre `<>`.
+
+**Obligatoire** : Telegram, `ENCRYPTION_KEY`, `DB_URL`, `REDIS_URL`, `POLYGON_RPC_URL` (Alchemy).  
+**WebSocket CLOB** : aucune clé à mettre, le bot utilise l’URL publique Polymarket.
+
+| Variable | Obligatoire | À quoi ça sert |
+|----------|-------------|----------------|
+| `TELEGRAM_TOKEN` | Oui | Token du bot (BotFather) |
+| `ADMIN_CHAT_ID` | Oui | Ton ID Telegram (admin) |
+| `ENCRYPTION_KEY` | Oui | Clé pour chiffrer les clés privées (génère une longue chaîne aléatoire) |
+| `DB_URL` | Oui | Connexion Postgres (Docker) |
+| `REDIS_URL` | Oui | Connexion Redis (Docker) |
+| `POLYGON_RPC_URL` | Oui | RPC Polygon (Alchemy, etc.) — solde, exécution des trades |
+| `FEES_WALLET` | Non | Adresse qui reçoit les frais (vide = pas de frais) |
+| `WELCOME_BANNER_URL` | Non | URL de l’image bannière /start |
+
+```env
+# --- Telegram (obligatoire) ---
+TELEGRAM_TOKEN=<ton_token_botfather>
+ADMIN_CHAT_ID=<ton_telegram_user_id>
+
+# --- Chiffrement des wallets (obligatoire) ---
+ENCRYPTION_KEY=<une_cle_longue_aleatoire_32_caracteres_min>
+
+# --- Base de données + Redis (obligatoire, ne pas modifier si Docker standard) ---
+DB_URL=postgresql+asyncpg://polybot:polybot_dev@db:5432/polybot
+REDIS_URL=redis://redis:6379
+
+# --- Polygon / Web3 — Alchemy (obligatoire pour trades + soldes) ---
+POLYGON_RPC_URL=https://polygon-mainnet.g.alchemy.com/v2/<TA_CLE_ALCHEMY>
+
+# --- Polling + WebSocket (optionnel) ---
+# Le WebSocket CLOB n'a pas besoin de clé. Intervalle de secours en secondes.
+MONITOR_POLL_INTERVAL=15
+
+# --- Frais (optionnel) ---
+FEES_WALLET=
+PLATFORM_FEE_RATE=0.01
+
+# --- Exécution (optionnel) ---
+MAX_CONCURRENT_TRADES=20
+COLLECT_FEES_ONCHAIN=false
+
+# --- Bridge / Transak (optionnel) ---
+LIFI_API_KEY=
+ACROSS_API_URL=https://across.to/api
+BRIDGE_SLIPPAGE=0.005
+TRANSAK_API_KEY=
+
+# --- Bannière /start (optionnel) ---
+WELCOME_BANNER_URL=
+```

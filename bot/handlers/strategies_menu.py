@@ -71,7 +71,7 @@ async def strat_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "Aucune stratégie active pour le moment.\n\n"
             "Les stratégies seront ajoutées prochainement."
         )
-        keyboard = [[InlineKeyboardButton("⬅️ Menu", callback_data="menu_back")]]
+        keyboard = [[InlineKeyboardButton("⬅️ Stratégies", callback_data="hub_strat")]]
         if query:
             await query.edit_message_text(text, parse_mode="Markdown",
                                          reply_markup=InlineKeyboardMarkup(keyboard))
@@ -107,7 +107,7 @@ async def strat_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 callback_data=f"strat_pick:{strat.id}",
             )])
 
-    keyboard.append([InlineKeyboardButton("⬅️ Menu", callback_data="menu_back")])
+    keyboard.append([InlineKeyboardButton("⬅️ Stratégies", callback_data="hub_strat")])
 
     text = "\n".join(lines)
     if query:

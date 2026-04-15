@@ -2,12 +2,15 @@
 
 import asyncio
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram.ext import Application
 
 from bot.config import settings
-from bot.db.session import init_db
+from bot.db.session import init_db, async_session
+from bot.models.user import User
+from bot.models.trade import Trade, TradeStatus, TradeSide
 from bot.handlers.start import get_start_handler, get_setup_group_handler
 from bot.handlers.settings import get_settings_handler
 from bot.handlers.balance import get_balance_handlers
@@ -35,6 +38,7 @@ from bot.services.scheduler import (
     health_check,
     settle_trades,
     reset_strategy_daily_counters,
+    snapshot_market_prices,
 )
 
 # Strategy engine imports
@@ -287,6 +291,13 @@ def setup_scheduler(
         id="strategy_perf_fees",
     )
 
+    # Snapshot prices for active markets every hour (momentum tracking)
+    scheduler.add_job(
+        lambda: snapshot_market_prices(polymarket_client=polymarket_client),
+        "interval", hours=1,
+        id="snapshot_market_prices",
+    )
+
     return scheduler
 
 
@@ -356,14 +367,95 @@ async def main() -> None:
 
     # Wire position manager exit callback to engine
     async def on_position_exit(user_id, position, reason):
-        """Called by PositionManager when SL/TP triggers an exit."""
+        """Called by PositionManager when SL/TP triggers an exit.
+
+        Executes a real SELL order on Polymarket to close the position.
+        """
         logger.info(
-            "Position exit callback: user=%d reason=%s market=%s",
-            user_id, reason, position.market_id[:20],
+            "Position exit triggered: user=%d reason=%s market=%s shares=%.4f",
+            user_id, reason, position.market_id[:20], position.shares,
         )
-        # The actual sell is handled by PositionManager's alert
-        # In a full implementation, this would create a SELL signal
-        # and push it through the engine
+
+        if not position.shares or position.shares <= 0:
+            logger.warning("No shares to sell for position user=%d", user_id)
+            return
+
+        try:
+            from bot.services.crypto import decrypt_private_key
+            from bot.services.polymarket import polymarket_client as pm_client
+
+            async with async_session() as session:
+                user = await session.get(User, user_id)
+                if not user:
+                    logger.error("User not found for exit: user_id=%d", user_id)
+                    return
+
+                if user.paper_trading:
+                    # Paper mode: credit back the proceeds
+                    proceeds = position.shares * position.current_price
+                    user.paper_balance += proceeds
+                    await session.commit()
+                    logger.info(
+                        "Paper exit: user=%d proceeds=%.2f balance=%.2f",
+                        user_id, proceeds, user.paper_balance,
+                    )
+                    return
+
+                # Live mode: decrypt PK and place SELL order
+                if not user.encrypted_private_key:
+                    logger.error("No encrypted PK for user=%d", user_id)
+                    return
+
+                pk = decrypt_private_key(
+                    user.encrypted_private_key,
+                    settings.encryption_key,
+                )
+
+                try:
+                    order_result = await pm_client.place_market_order(
+                        private_key=pk,
+                        token_id=position.token_id,
+                        side="SELL",
+                        amount_usdc=position.shares * position.current_price,
+                    )
+
+                    if order_result.success:
+                        logger.info(
+                            "Exit SELL filled: user=%d market=%s shares=%.4f order=%s",
+                            user_id, position.market_id[:20],
+                            position.shares, order_result.order_id,
+                        )
+                        # Record the exit trade
+                        import uuid
+                        exit_trade = Trade(
+                            trade_id=str(uuid.uuid4())[:16],
+                            user_id=user_id,
+                            market_id=position.market_id,
+                            token_id=position.token_id,
+                            market_question=position.market_question,
+                            side=TradeSide.SELL,
+                            price=position.current_price,
+                            gross_amount_usdc=position.shares * position.current_price,
+                            fee_amount_usdc=0,
+                            net_amount_usdc=position.shares * position.current_price,
+                            shares=order_result.filled_size,
+                            status=TradeStatus.FILLED,
+                            tx_hash=order_result.order_id,
+                            is_paper=False,
+                            executed_at=datetime.utcnow(),
+                        )
+                        session.add(exit_trade)
+                        await session.commit()
+                    else:
+                        logger.error(
+                            "Exit SELL failed: user=%d error=%s",
+                            user_id, order_result.error,
+                        )
+                finally:
+                    del pk
+
+        except Exception:
+            logger.exception("Exit execution failed: user=%d market=%s", user_id, position.market_id[:20])
 
     position_manager.set_exit_callback(on_position_exit)
 

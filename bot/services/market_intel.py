@@ -120,8 +120,24 @@ class MarketIntelService:
             is_coin_flip = 0.45 <= price_current <= 0.55
             liquidity_score = self._compute_liquidity_score(volume_24h, spread_avg)
 
-            # Momentum (would need historical prices — simplified here)
-            momentum_1h = None  # TODO: track price history for real momentum
+            # Momentum: check if we have a stored price_1h_ago for this market
+            momentum_1h = None
+            try:
+                async with async_session() as _sess:
+                    from sqlalchemy import select as _sel
+                    _existing = (
+                        await _sess.execute(
+                            _sel(MarketIntelModel.price_1h_ago).where(
+                                MarketIntelModel.market_id == market_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if _existing and _existing > 0 and price_current > 0:
+                        momentum_1h = round(
+                            (price_current - _existing) / _existing * 100, 2
+                        )
+            except Exception:
+                pass
 
             now = utcnow()
 

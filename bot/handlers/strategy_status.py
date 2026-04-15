@@ -87,7 +87,8 @@ async def strat_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     keyboard = [
         [InlineKeyboardButton("📜 Historique trades", callback_data="strat_history")],
         [InlineKeyboardButton("📊 Voir stratégies", callback_data="menu_strategies")],
-        [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+        [InlineKeyboardButton("⬅️ Stratégies", callback_data="hub_strat"),
+         InlineKeyboardButton("🏠 Accueil", callback_data="hub_home")],
     ]
 
     await query.edit_message_text(
@@ -152,7 +153,8 @@ async def strat_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     keyboard = [
         [InlineKeyboardButton("⬅️ Retour", callback_data="strat_status")],
-        [InlineKeyboardButton("🏠 Menu", callback_data="menu_back")],
+        [InlineKeyboardButton("⬅️ Stratégies", callback_data="hub_strat"),
+         InlineKeyboardButton("🏠 Accueil", callback_data="hub_home")],
     ]
 
     await query.edit_message_text(

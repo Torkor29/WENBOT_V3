@@ -131,10 +131,26 @@ class StrategyResolver:
                 outcome = market.get("outcome", "")
                 logger.info("Market resolved: slug=%s outcome=%s", market_slug, outcome)
 
+                # Extract winning token IDs from the market's tokens array
+                winning_token_ids = set()
+                tokens = market.get("tokens", [])
+                for token in tokens:
+                    if token.get("winner", False):
+                        winning_token_ids.add(token.get("token_id", ""))
+
+                # Fallback: use clobTokenIds + outcome for binary markets
+                if not winning_token_ids:
+                    clob_ids = market.get("clobTokenIds", [])
+                    if len(clob_ids) == 2 and outcome.upper() in ("YES", "NO"):
+                        # Index 0 = YES token, index 1 = NO token
+                        idx = 0 if outcome.upper() == "YES" else 1
+                        if idx < len(clob_ids):
+                            winning_token_ids.add(clob_ids[idx])
+
                 return {
                     "resolved": True,
                     "outcome": outcome,
-                    "resolution_price": market.get("outcomePrices"),
+                    "winning_token_ids": winning_token_ids,
                 }
 
         except asyncio.TimeoutError:
@@ -147,44 +163,25 @@ class StrategyResolver:
     async def _process_resolved_trade(self, trade: Trade, resolution: dict) -> bool:
         """Update a trade with resolution results. Returns True if WON."""
         outcome = resolution.get("outcome", "")
-        trade_side = trade.side.value.upper() if trade.side else ""
-
-        # Determine win/loss
-        # Trade.side is BUY/SELL, but we need the market side (YES/NO)
-        # In strategy trades, the signal.side (YES/NO) is stored as market_outcome
-        # Actually, we need to check the token_id against the outcome
-        # For simplicity, use the same logic as Dirto: compare token side
-        # The token_id encodes the YES/NO side implicitly
-
-        # We need to know if the user bet YES or NO
-        # In strategy context, this comes from the signal.side stored in trade
-        # Since we don't store signal.side directly, let's check the market_slug
-        # For now, use basic heuristic: check if trade was a winning position
-
-        # Simplified: use market_outcome field or check via token_id
-        # The Dirto resolver checks trade["side"] which is YES/NO
-        # But in our Trade model, side is BUY/SELL
-        # We need a separate field for the bet direction (YES/NO)
-        # WORKAROUND: Check via Polymarket API resolution price
+        winning_token_ids = resolution.get("winning_token_ids", set())
 
         shares = trade.shares or 0
         cost = trade.net_amount_usdc or 0
 
-        # For strategy trades, determine win via market resolution
-        # We'll check if this is a winning token using polymarket's resolution
-        # For simplicity: assume trade is a winner if outcome matches
-        # This is a simplified version — full implementation would check token_id
+        # Determine win/loss by checking if trade's token_id is a winning token
         trade_won = False
-        if outcome.lower() in ("yes", "no"):
-            # Heuristic: if we can match, do so
-            # In practice, this should check the token_id against winning_token_id
-            # For now, we mark as resolved and let the PnL be calculated
-            trade_won = True  # Placeholder — refined by redeem result
+        if winning_token_ids and trade.token_id:
+            trade_won = trade.token_id in winning_token_ids
+
+        # For SELL trades, the user exited before resolution — mark as resolved but no win/loss
+        if trade.side == TradeSide.SELL:
+            trade_won = False
 
         result_str = "WON" if trade_won else "LOST"
 
         # PnL calculation
         if trade.side == TradeSide.BUY:
+            # WON: shares pay out at $1 each. LOST: shares worth $0
             win_value = shares * 1.0 if trade_won else 0.0
             pnl = win_value - cost
         else:

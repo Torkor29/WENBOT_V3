@@ -209,7 +209,7 @@ async def _execute_lifi_bridge(
     quote: BridgeQuote,
     private_key: str,
 ) -> BridgeResult:
-    """Execute bridge via Li.Fi — sign and submit the transaction."""
+    """Execute bridge via Li.Fi — sign the Solana transaction and submit."""
     try:
         route_data = quote.route_data
         tx_data = route_data.get("transactionRequest", {})
@@ -221,24 +221,84 @@ async def _execute_lifi_bridge(
                 status=BridgeStatus.FAILED,
             )
 
-        # TODO: Sign with Solana private key and submit
-        # For now, return a pending result
-        # In production:
-        # 1. Sign tx_data with solana-py
-        # 2. Submit to Solana RPC
-        # 3. Monitor Li.Fi status endpoint
-        # 4. Wait for USDC arrival on Polygon
+        import base64
+        import asyncio
+        from solders.keypair import Keypair
+        from solders.transaction import VersionedTransaction
+        from solana.rpc.async_api import AsyncClient as SolanaClient
 
+        # 1. Build keypair from user's Solana private key
+        pk_bytes = bytes.fromhex(private_key.replace("0x", ""))
+        keypair = Keypair.from_bytes(pk_bytes)
+
+        # 2. Deserialize the transaction from Li.Fi response
+        raw_tx = tx_data.get("data", "")
+        if not raw_tx:
+            return BridgeResult(
+                success=False,
+                error="Empty transaction data from Li.Fi",
+                status=BridgeStatus.FAILED,
+            )
+
+        tx_bytes = base64.b64decode(raw_tx)
+        transaction = VersionedTransaction.from_bytes(tx_bytes)
+
+        # 3. Sign the transaction
+        transaction.sign([keypair])
+
+        # 4. Submit to Solana RPC
+        solana_rpc = "https://api.mainnet-beta.solana.com"
+        async with SolanaClient(solana_rpc) as sol_client:
+            result = await asyncio.wait_for(
+                sol_client.send_transaction(transaction),
+                timeout=60,
+            )
+
+            if result.value:
+                tx_hash = str(result.value)
+                logger.info(
+                    "Li.Fi bridge submitted: tx=%s amount=%.4f SOL → ~%.2f USDC",
+                    tx_hash, quote.input_amount, quote.output_amount,
+                )
+
+                # 5. Wait for confirmation (non-blocking poll)
+                try:
+                    confirm_result = await asyncio.wait_for(
+                        sol_client.confirm_transaction(result.value),
+                        timeout=90,
+                    )
+                    confirmed = (
+                        confirm_result.value
+                        and len(confirm_result.value) > 0
+                    )
+                except asyncio.TimeoutError:
+                    confirmed = False
+                    logger.warning("Solana confirmation timed out, bridge may still complete")
+
+                return BridgeResult(
+                    success=True,
+                    provider=quote.provider,
+                    input_amount=quote.input_amount,
+                    output_amount=quote.output_amount,
+                    fee_usd=quote.fee_usd,
+                    tx_hash=tx_hash,
+                    status=BridgeStatus.BRIDGING if confirmed else BridgeStatus.PENDING,
+                )
+            else:
+                return BridgeResult(
+                    success=False,
+                    provider=quote.provider,
+                    error="Solana RPC rejected the transaction",
+                    status=BridgeStatus.FAILED,
+                )
+
+    except ImportError as e:
+        logger.error("Solana dependencies missing for bridge: %s", e)
         return BridgeResult(
             success=False,
-            provider=quote.provider,
-            input_amount=quote.input_amount,
-            output_amount=quote.output_amount,
-            fee_usd=quote.fee_usd,
-            error="Bridge execution pending implementation — use get_best_quote() for quotes",
-            status=BridgeStatus.PENDING,
+            error=f"Missing dependency: {e}. Install solana and solders packages.",
+            status=BridgeStatus.FAILED,
         )
-
     except Exception as e:
         logger.error(f"Li.Fi bridge execution failed: {e}")
         return BridgeResult(
