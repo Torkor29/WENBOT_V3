@@ -38,11 +38,6 @@ class AuditAction(str, Enum):
     FEE_TRANSFERRED = "fee_transferred"
     FEE_TRANSFER_FAILED = "fee_transfer_failed"
 
-    # Bridge actions
-    BRIDGE_QUOTED = "bridge_quoted"
-    BRIDGE_EXECUTED = "bridge_executed"
-    BRIDGE_FAILED = "bridge_failed"
-
     # Security actions
     RATE_LIMITED = "rate_limited"
     CIRCUIT_BREAKER_TRIPPED = "circuit_breaker_tripped"

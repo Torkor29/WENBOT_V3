@@ -820,7 +820,6 @@ class CopyTradeEngine:
             trade=trade,
             fee_result=fee_result,
             execution_time_s=elapsed,
-            bridge_used=trade.bridge_used,
             master_pnl=signal.master_pnl_pct,
         )
 

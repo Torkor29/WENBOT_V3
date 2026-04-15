@@ -148,10 +148,8 @@ class RateLimiter:
 LIMITS = {
     "command": (10, 60),         # 10 commands per minute per user
     "trade": (5, 60),            # 5 trades per minute per user
-    "bridge": (2, 300),          # 2 bridges per 5 minutes
     "admin": (20, 60),           # 20 admin actions per minute
     "api_polymarket": (30, 60),  # 30 Polymarket API calls per minute
-    "api_lifi": (10, 60),        # 10 Li.Fi API calls per minute
 }
 
 

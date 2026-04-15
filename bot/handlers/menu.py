@@ -678,7 +678,6 @@ async def menu_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     keyboard = [
         [InlineKeyboardButton("💳 Carte bancaire", callback_data="dep_card")],
         [InlineKeyboardButton("🏦 Depuis un exchange", callback_data="dep_exchange")],
-        [InlineKeyboardButton("🌉 Bridge (SOL, ETH…)", callback_data="dep_bridge")],
         [InlineKeyboardButton("📋 Copier adresse", callback_data="deposit_copy_address")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]
@@ -688,7 +687,7 @@ async def menu_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-# ── Withdraw / Bridge / Settings / Traders ──────────────────────────
+# ── Withdraw / Settings / Traders ────────────────────────────────────
 
 async def menu_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ce handler reste déclaré mais l'action réelle est gérée par
@@ -697,14 +696,6 @@ async def menu_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     query = update.callback_query
     await query.answer()
     # Le flux de retrait démarre automatiquement via get_withdraw_handler().
-
-
-async def menu_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Délègue directement au flux /bridge pour éviter de demander une commande."""
-    # On laisse la logique d'affichage centralisée dans bridge_command
-    from bot.handlers.bridge import bridge_command
-
-    await bridge_command(update, context)
 
 
 async def menu_traders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3877,7 +3868,6 @@ def get_menu_handlers() -> list:
         CallbackQueryHandler(menu_traders, pattern="^menu_traders$"),
         CallbackQueryHandler(menu_trader_remove, pattern=r"^mt_rm_\d+$"),
         CallbackQueryHandler(menu_settings, pattern="^menu_settings$"),
-        CallbackQueryHandler(menu_bridge, pattern="^menu_bridge$"),
         CallbackQueryHandler(menu_history, pattern="^menu_history$"),
         CallbackQueryHandler(menu_help, pattern="^menu_help$"),
         CallbackQueryHandler(menu_help, pattern="^menu_help_2$"),

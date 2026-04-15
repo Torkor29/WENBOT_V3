@@ -36,7 +36,6 @@ SETTING_LABELS = {
     "copy_delay_seconds": ("⏱️ Délai de copie", "s"),
     "manual_confirmation": ("🔔 Confirmation manuelle", ""),
     "confirmation_threshold_usdc": ("🔔 Seuil confirmation", "USDC"),
-    "auto_bridge_sol": ("🌉 Auto-bridge SOL", ""),
     # ── V3 Smart Analysis ──
     "min_signal_score": ("🎯 Score minimum", "/100"),
     "cold_trader_threshold": ("🥶 Seuil trader froid", "%"),
@@ -570,7 +569,6 @@ def _build_main_menu(us, paper_trading: bool) -> tuple[str, list]:
         ],
         [
             InlineKeyboardButton("⛽ Vitesse Gas", callback_data="set_gas_mode"),
-            InlineKeyboardButton("🌉 Bridge SOL", callback_data="set_auto_bridge_sol"),
         ],
         [
             InlineKeyboardButton(
@@ -1245,7 +1243,7 @@ async def setting_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "signal_scoring_enabled", "smart_filter_enabled", "auto_pause_cold_traders",
         "skip_coin_flip", "trailing_stop_enabled", "time_exit_enabled", "scale_out_enabled",
     )
-    if field in ("manual_confirmation", "auto_bridge_sol", "use_gamma_monitor", "use_ws_monitor") + V3_TOGGLE_FIELDS:
+    if field in ("manual_confirmation", "use_gamma_monitor", "use_ws_monitor") + V3_TOGGLE_FIELDS:
         async with async_session() as session:
             user = await get_user_by_telegram_id(session, query.from_user.id)
             us = await get_or_create_settings(session, user)

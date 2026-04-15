@@ -16,7 +16,6 @@ from bot.handlers.settings import get_settings_handler
 from bot.handlers.balance import get_balance_handlers
 from bot.handlers.controls import get_control_handlers
 from bot.handlers.admin import get_admin_handlers
-from bot.handlers.bridge import get_bridge_handler, get_bridge_callbacks
 from bot.handlers.deposit import get_deposit_handlers
 from bot.handlers.menu import get_menu_handlers
 from bot.handlers.withdraw import get_withdraw_handler
@@ -79,9 +78,6 @@ def build_application() -> Application:
     app.add_handler(get_start_handler())
     app.add_handler(get_setup_group_handler())  # setup_my_group from any screen
     app.add_handler(get_settings_handler())
-    app.add_handler(get_bridge_handler())
-    for handler in get_bridge_callbacks():
-        app.add_handler(handler)
     app.add_handler(get_withdraw_handler())
     for handler in get_deposit_handlers():
         app.add_handler(handler)

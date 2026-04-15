@@ -16,7 +16,6 @@ def format_trade_notification(
     trade: Trade,
     fee_result: FeeResult,
     execution_time_s: float = 0.0,
-    bridge_used: bool = False,
     master_pnl: float = 0.0,
     signal_score: float = 0.0,
     score_grade: str = "",
@@ -81,32 +80,6 @@ def format_trade_error(
         f"📋 _{market_question}_\n\n"
         f"❌ {error_message}\n\n"
         f"_Trade non exécuté — vérifiez ⚙️ Paramètres_"
-    )
-
-
-def format_bridge_notification(
-    amount_sol: float,
-    amount_usdc: float,
-    bridge_provider: str,
-    fee_usd: float,
-    tx_hash: str,
-    status: str = "completed",
-) -> str:
-    """Notification de bridge SOL → USDC."""
-    status_map = {
-        "completed": "✅ Terminé",
-        "pending": "🟡 En cours",
-        "failed": "🔴 Échoué",
-    }
-    status_label = status_map.get(status, status)
-
-    return (
-        f"🌉 *BRIDGE SOL → USDC*\n"
-        f"{SEP}\n"
-        f"☀️ {amount_sol:.4f} SOL → 💵 {fmt_usd(amount_usdc)}\n"
-        f"🔄 {bridge_provider} | Fee {fmt_usd(fee_usd)}\n"
-        f"📋 `{tx_hash[:10]}...{tx_hash[-6:]}`\n"
-        f"{status_label}"
     )
 
 

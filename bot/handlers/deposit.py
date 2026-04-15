@@ -78,9 +78,6 @@ async def deposit_command(
             "🏦 Envoyer depuis un exchange", callback_data="dep_exchange"
         )],
         [InlineKeyboardButton(
-            "🌉 Bridge (SOL, ETH → Polygon)", callback_data="dep_bridge"
-        )],
-        [InlineKeyboardButton(
             "📋 Copier mon adresse Polygon", callback_data="deposit_copy_address"
         )],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
@@ -176,75 +173,6 @@ async def _deposit_exchange(
     )
 
 
-async def _deposit_bridge(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    query = update.callback_query
-    await query.answer()
-
-    async with async_session() as session:
-        user = await get_user_by_telegram_id(session, update.effective_user.id)
-        wallet = user.wallet_address if user else ""
-        auto = user.wallet_auto_created if user else False
-
-    if auto:
-        wallet_note = (
-            "📬 Les fonds arriveront sur **le wallet créé par le bot** :\n"
-            f"`{wallet}`\n"
-            "Vous n'avez pas besoin de MetaMask ni d'un wallet Polygon séparé."
-        )
-    else:
-        wallet_note = (
-            "📬 Les fonds arriveront sur **votre wallet importé** :\n"
-            f"`{wallet}`\n"
-            "C'est le même que celui que vous utilisez déjà (ex: MetaMask)."
-        )
-
-    text = (
-        "🌉 **BRIDGE — CONVERTIR ET ENVOYER SUR POLYGON**\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "Vous avez de la crypto sur une autre blockchain ?\n"
-        "Un bridge la convertit en USDC Polygon en une étape.\n\n"
-        "**Ça marche dans les deux cas** :\n"
-        "• Wallet créé par le bot → le bridge envoie les USDC dessus\n"
-        "• Wallet importé (MetaMask, etc.) → même chose\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"{wallet_note}\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "**Scénarios courants :**\n\n"
-        "☀️ **J'ai du SOL sur Phantom (mobile)**\n"
-        "→ Cliquez sur « ☀️ Ouvrir le guide Bridge » ci-dessous\n"
-        "→ Suivez les étapes pour ouvrir Jumper **depuis le navigateur intégré "
-        "de Phantom** (ou utilisez la section Bridge de Phantom)\n"
-        "→ Phantom signe la transaction Solana\n"
-        "→ Le bridge envoie les USDC à l'adresse Polygon ci-dessus\n\n"
-        "🔷 **J'ai de l'ETH ou de l'USDC sur Ethereum/Arbitrum**\n"
-        "→ Ouvrez Jumper Exchange (lien ci-dessous)\n"
-        "→ Connectez votre wallet (MetaMask, etc.)\n"
-        "→ Bridgez vers USDC Polygon\n"
-        "→ Mettez l'adresse ci-dessus comme destination\n\n"
-        "💡 *Tous les bridges permettent d'indiquer une adresse de "
-        "destination différente du wallet source. C'est comme ça qu'on "
-        "envoie d'une chain à l'autre sans avoir besoin d'un wallet "
-        "sur la chain d'arrivée.*"
-    )
-
-    buttons = [
-        [InlineKeyboardButton("☀️ Ouvrir le guide Bridge", callback_data="dep_go_bridge")],
-        [InlineKeyboardButton(
-            "🔗 Jumper Exchange (ETH/autre)", url="https://jumper.exchange"
-        )],
-        [InlineKeyboardButton(
-            "📋 Copier adresse Polygon", callback_data="deposit_copy_address"
-        )],
-        [InlineKeyboardButton("⬅️ Retour", callback_data="dep_back")],
-    ]
-
-    await query.edit_message_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons)
-    )
-
-
 async def _deposit_back(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -277,9 +205,6 @@ async def _deposit_back(
             "🏦 Envoyer depuis un exchange", callback_data="dep_exchange"
         )],
         [InlineKeyboardButton(
-            "🌉 Bridge (SOL, ETH → Polygon)", callback_data="dep_bridge"
-        )],
-        [InlineKeyboardButton(
             "📋 Copier mon adresse Polygon", callback_data="deposit_copy_address"
         )],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
@@ -309,22 +234,11 @@ async def _deposit_copy_address(
             await query.answer("Wallet non configuré", show_alert=True)
 
 
-async def _deposit_go_bridge(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Ouvrir directement le guide / flux bridge depuis le menu dépôt."""
-    from bot.handlers.bridge import bridge_command
-
-    await bridge_command(update, context)
-
-
 def get_deposit_handlers() -> list:
     return [
         CommandHandler("deposit", deposit_command),
         CallbackQueryHandler(_deposit_card, pattern="^dep_card$"),
         CallbackQueryHandler(_deposit_exchange, pattern="^dep_exchange$"),
-        CallbackQueryHandler(_deposit_bridge, pattern="^dep_bridge$"),
-        CallbackQueryHandler(_deposit_go_bridge, pattern="^dep_go_bridge$"),
         CallbackQueryHandler(_deposit_back, pattern="^dep_back$"),
         CallbackQueryHandler(
             _deposit_copy_address, pattern="^deposit_copy_address$"

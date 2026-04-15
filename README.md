@@ -17,7 +17,7 @@ Chaque utilisateur dispose de wallets separes, de parametres individuels et de n
   - [Suivi de Strategies](#suivi-de-strategies)
   - [Smart Analysis V3](#smart-analysis-v3)
   - [Gestion des positions](#gestion-des-positions)
-  - [Bridge et On-ramp](#bridge-et-on-ramp)
+  - [Depot de fonds](#depot-de-fonds)
   - [Dashboard Web](#dashboard-web)
 - [Modeles de donnees](#modeles-de-donnees)
 - [Services](#services)
@@ -219,21 +219,22 @@ Chaque exit declenche un ordre SELL reel (ou paper) via le callback `on_position
 | `max_category_exposure_pct` | Exposition max a une categorie (ex: 40% crypto) |
 | `max_direction_bias_pct` | Biais directionnel max (ex: 70% YES max) |
 
-### Bridge et On-ramp
+### Depot de fonds
 
-**SOL -> USDC Polygon** via deux providers :
+Le bot guide l'utilisateur pour deposer des USDC sur son wallet Polygon. Deux methodes proposees :
 
-1. **Li.Fi** : aggregateur de bridges cross-chain
-   - Quote : `GET /v1/quote` avec les parametres source/dest
-   - Execution : deserialisation de la `VersionedTransaction` Solana, signature via `solders`, soumission au RPC Solana
-   - Confirmation : poll de `confirm_transaction` (timeout 90s)
+**1. Carte bancaire** (debutants)
+- Lien Transak pre-rempli avec le wallet de l'utilisateur
+- MoonPay en alternative
+- USDC recus en ~5 min, frais 2-4%
 
-2. **Across Protocol** : bridge rapide (fallback)
-   - Quote : `GET /suggested-fees` pour estimer les frais relay
+**2. Depuis un exchange** (Binance, Coinbase, OKX...)
+- Acheter des USDC sur l'exchange
+- Retrait vers l'adresse Polygon du wallet bot
+- **Important** : reseau Polygon uniquement (pas Ethereum, pas Arbitrum)
+- ~2-5 min, frais ~0.1 USDC
 
-Le bot compare les deux quotes et utilise le meilleur (output max = frais min).
-
-**On-ramp fiat** : lien Transak pre-rempli avec le wallet de l'utilisateur (USDC sur Polygon).
+Le bot affiche l'adresse du wallet et permet de la copier en un clic. Pour le gas Polygon, l'utilisateur doit aussi envoyer ~0.2 POL/MATIC (quelques centimes suffisent pour des dizaines de trades).
 
 ### Dashboard Web
 
@@ -261,7 +262,6 @@ users
   |-- id, uuid, telegram_id, telegram_username, role (ADMIN|FOLLOWER)
   |-- wallet_address, encrypted_private_key              # Copy wallet
   |-- strategy_wallet_address, encrypted_strategy_pk     # Strategy wallet (separe)
-  |-- solana_wallet_address, encrypted_solana_key         # Pour bridge SOL
   |-- is_active, is_paused, paper_trading, live_mode_confirmed
   |-- daily_limit_usdc, daily_spent_usdc
   |-- paper_balance, paper_initial_balance
@@ -770,7 +770,7 @@ Toutes les variables sont dans `.env` (voir `.env.example` pour le template comp
 | **ORM** | SQLAlchemy 2.0 (async) + asyncpg |
 | **Base de donnees** | PostgreSQL 16 |
 | **Cache / Pub-Sub** | Redis 7 (hiredis) |
-| **Blockchain** | Web3.py 7.6 (Polygon) + solana 0.35 + solders 0.21 (Solana) |
+| **Blockchain** | Web3.py 7.6 (Polygon) |
 | **HTTP** | httpx 0.28 (HTTP/2) |
 | **Chiffrement** | cryptography 44.0 (AES-256-GCM) |
 | **Scheduler** | APScheduler 3.10 |

@@ -114,7 +114,7 @@ async def onboard_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.message.reply_text(
         "📖 **Comment ça marche ?**\n\n"
         "1️⃣ Vous configurez un wallet Polygon (créé par le bot ou le vôtre)\n"
-        "2️⃣ Vous déposez des USDC dessus (carte, exchange ou bridge)\n"
+        "2️⃣ Vous déposez des USDC dessus (carte ou exchange)\n"
         "3️⃣ Vous choisissez quels traders copier\n"
         "4️⃣ Les trades sont copiés automatiquement\n\n"
         "🔐 **Sécurité :**\n"
@@ -153,7 +153,7 @@ async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         "🆕 **Créer un wallet** (recommandé si débutant)\n"
         "→ Le bot génère un nouveau wallet Polygon pour vous.\n"
         "→ Il sera vide : vous devrez y déposer des USDC ensuite "
-        "(par carte bancaire, depuis un exchange, ou via bridge).\n"
+        "(par carte bancaire ou depuis un exchange).\n"
         "→ Vous n'avez PAS besoin de MetaMask ou autre app.\n\n"
         "📩 **J'ai déjà un wallet Polygon** (utilisateurs avancés)\n"
         "→ Vous avez un wallet Polygon (MetaMask, etc.) avec des USDC dessus.\n"

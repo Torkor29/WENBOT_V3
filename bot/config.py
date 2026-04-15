@@ -26,10 +26,7 @@ class Settings(BaseSettings):
     db_url: str = "sqlite+aiosqlite:///./polybot.db"
     redis_url: str = "redis://redis:6379"
 
-    # Bridge / On-ramp
-    lifi_api_key: str = ""
-    across_api_url: str = "https://across.to/api"
-    bridge_slippage: float = 0.005
+    # On-ramp (card purchase)
     transak_api_key: str = ""
 
     # Execution tuning
