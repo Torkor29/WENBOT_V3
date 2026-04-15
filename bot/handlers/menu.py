@@ -125,19 +125,12 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
             InlineKeyboardButton("📊 Positions", callback_data="menu_positions"),
         ],
         [
-            InlineKeyboardButton("📜 Historique", callback_data="menu_history"),
             InlineKeyboardButton("👥 Traders suivis", callback_data="menu_traders"),
+            InlineKeyboardButton("📜 Historique", callback_data="menu_history"),
         ],
         [
             InlineKeyboardButton("⚙️ Paramètres", callback_data="menu_settings"),
-            InlineKeyboardButton("📋 Mes copies", callback_data="menu_recap"),
-        ],
-        [
-            InlineKeyboardButton("📡 Activité traders", callback_data="menu_dashboard"),
-            InlineKeyboardButton("📈 Analytics V3", callback_data="v3_analytics"),
-        ],
-        [
-            InlineKeyboardButton("🔍 Scanner traders", callback_data="menu_scanner"),
+            InlineKeyboardButton("💰 Déposer", callback_data="menu_deposit"),
         ],
     ])
 
@@ -151,14 +144,8 @@ def _build_main_menu_content(tg_user, user) -> tuple[str, list]:
             InlineKeyboardButton("▶️ Reprendre le Copy", callback_data="resume_copy"),
         ])
 
-    if user.paper_trading:
-        keyboard.append([
-            InlineKeyboardButton("📝 Paper Wallet", callback_data="menu_paper"),
-        ])
-
-    # Switch to other service + back to hub
+    # Back to hub
     keyboard.append([
-        InlineKeyboardButton("🔄 Stratégies →", callback_data="hub_strat"),
         InlineKeyboardButton("🏠 Accueil", callback_data="hub_home"),
     ])
 
@@ -245,7 +232,7 @@ def _build_strategy_menu(tg_user, user) -> tuple[str, list]:
 
 
 async def _send_main_menu(message, tg_user, text_override: str | None = None) -> None:
-    """Build and send the main menu (reusable)."""
+    """Build and send the HUB menu (reusable)."""
     async with async_session() as session:
         user = await get_user_by_telegram_id(session, tg_user.id)
         if not user:
@@ -254,43 +241,7 @@ async def _send_main_menu(message, tg_user, text_override: str | None = None) ->
             )
             return
 
-        text, keyboard = _build_main_menu_content(tg_user, user)
-
-        # Fetch last copied trade per followed trader
-        us = await get_or_create_settings(session, user)
-        followed = us.followed_wallets or []
-        if followed:
-            from bot.models.trade import Trade, TradeStatus
-            last_trades_lines: list[str] = []
-            for wallet in followed:
-                w_short = f"{wallet[:6]}...{wallet[-4:]}"
-                result = await session.execute(
-                    select(Trade).where(
-                        Trade.user_id == user.id,
-                        Trade.master_wallet == wallet,
-                        Trade.status == TradeStatus.FILLED,
-                    ).order_by(desc(Trade.created_at)).limit(1)
-                )
-                last = result.scalar_one_or_none()
-                if last and last.created_at:
-                    dt = last.created_at.strftime("%d/%m %H:%M")
-                    side = "🟢 BUY" if last.side.value == "buy" else "🔴 SELL"
-                    q = last.market_question or last.market_id or "?"
-                    if len(q) > 30:
-                        q = q[:27] + "..."
-                    last_trades_lines.append(
-                        f"  `{w_short}` → {side} {dt}\n"
-                        f"    _{q}_ • {last.net_amount_usdc:.2f}$"
-                    )
-                else:
-                    last_trades_lines.append(
-                        f"  `{w_short}` → _Aucun trade copié_"
-                    )
-            text += (
-                "\n📡 **Dernière activité copiée :**\n"
-                + "\n".join(last_trades_lines)
-                + "\n"
-            )
+        text, keyboard = _build_hub_menu(tg_user, user)
 
     header = text_override or text
 
@@ -2460,7 +2411,7 @@ async def onboard_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYP
             from bot.services.user_service import create_user
             user = await create_user(session, tg_user.id, username=tg_user.username)
 
-        text, keyboard = _build_main_menu_content(tg_user, user)
+        text, keyboard = _build_hub_menu(tg_user, user)
 
     await query.message.reply_text(
         text,
@@ -2512,6 +2463,7 @@ async def hub_strat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Back button → return to HUB."""
     query = update.callback_query
     await query.answer()
 
@@ -2522,43 +2474,7 @@ async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not user:
             return
 
-        text, keyboard = _build_main_menu_content(tg_user, user)
-
-        # Add last copied trade per followed trader
-        us = await get_or_create_settings(session, user)
-        followed = us.followed_wallets or []
-        if followed:
-            from bot.models.trade import Trade, TradeStatus
-            last_trades_lines: list[str] = []
-            for wallet in followed:
-                w_short = f"{wallet[:6]}...{wallet[-4:]}"
-                result = await session.execute(
-                    select(Trade).where(
-                        Trade.user_id == user.id,
-                        Trade.master_wallet == wallet,
-                        Trade.status == TradeStatus.FILLED,
-                    ).order_by(desc(Trade.created_at)).limit(1)
-                )
-                last = result.scalar_one_or_none()
-                if last and last.created_at:
-                    dt = last.created_at.strftime("%d/%m %H:%M")
-                    side = "🟢 BUY" if last.side.value == "buy" else "🔴 SELL"
-                    q = last.market_question or last.market_id or "?"
-                    if len(q) > 30:
-                        q = q[:27] + "..."
-                    last_trades_lines.append(
-                        f"  `{w_short}` → {side} {dt}\n"
-                        f"    _{q}_ • {last.net_amount_usdc:.2f}$"
-                    )
-                else:
-                    last_trades_lines.append(
-                        f"  `{w_short}` → _Aucun trade copié_"
-                    )
-            text += (
-                "\n📡 **Dernière activité copiée :**\n"
-                + "\n".join(last_trades_lines)
-                + "\n"
-            )
+        text, keyboard = _build_hub_menu(tg_user, user)
 
     await query.edit_message_text(
         text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
