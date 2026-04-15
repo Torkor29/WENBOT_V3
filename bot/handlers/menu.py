@@ -668,16 +668,19 @@ async def menu_deposit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         tag = "🏷️ *Wallet importé — vos fonds existants sont utilisables*"
 
     text = (
-        "💳 **DÉPOSER DES USDC**\n"
+        "💰 **DÉPOSER DES USDC**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{tag}\n"
         f"📬 `{wallet}`\n\n"
-        "Choisissez une option :"
+        "**Comment faire :**\n"
+        "1. Ouvrez votre exchange (Binance, Coinbase, OKX…)\n"
+        "2. Retrait → **USDC** → réseau **Polygon**\n"
+        "3. Collez l'adresse ci-dessus\n"
+        "4. Confirmez — reçu en ~2-5 min\n\n"
+        "💡 *Envoyez aussi ~0.2 POL/MATIC pour le gas.*"
     )
 
     keyboard = [
-        [InlineKeyboardButton("💳 Carte bancaire", callback_data="dep_card")],
-        [InlineKeyboardButton("🏦 Depuis un exchange", callback_data="dep_exchange")],
         [InlineKeyboardButton("📋 Copier adresse", callback_data="deposit_copy_address")],
         [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
     ]

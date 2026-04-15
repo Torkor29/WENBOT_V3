@@ -221,20 +221,19 @@ Chaque exit declenche un ordre SELL reel (ou paper) via le callback `on_position
 
 ### Depot de fonds
 
-Le bot guide l'utilisateur pour deposer des USDC sur son wallet Polygon. Deux methodes proposees :
+Le bot guide l'utilisateur pour deposer des USDC sur son wallet Polygon depuis un exchange (Binance, Coinbase, OKX, Bybit...).
 
-**1. Carte bancaire** (debutants)
-- Lien Transak pre-rempli avec le wallet de l'utilisateur
-- MoonPay en alternative
-- USDC recus en ~5 min, frais 2-4%
+**Etapes affichees a l'utilisateur :**
 
-**2. Depuis un exchange** (Binance, Coinbase, OKX...)
-- Acheter des USDC sur l'exchange
-- Retrait vers l'adresse Polygon du wallet bot
-- **Important** : reseau Polygon uniquement (pas Ethereum, pas Arbitrum)
-- ~2-5 min, frais ~0.1 USDC
+1. Ouvrir son exchange
+2. Acheter des USDC (carte, virement...)
+3. Retrait → USDC → reseau **Polygon** (pas Ethereum, pas Arbitrum)
+4. Coller l'adresse du wallet bot comme destination
+5. Confirmer — recu en ~2-5 min, frais ~0.1 USDC
 
-Le bot affiche l'adresse du wallet et permet de la copier en un clic. Pour le gas Polygon, l'utilisateur doit aussi envoyer ~0.2 POL/MATIC (quelques centimes suffisent pour des dizaines de trades).
+Le bot affiche l'adresse du wallet et permet de la copier en un clic. L'utilisateur doit aussi envoyer ~0.2 POL/MATIC pour le gas (quelques centimes suffisent pour des dizaines de trades).
+
+Aucune integration de paiement tiers (pas de Transak, MoonPay, etc.) — l'utilisateur gere ses fonds depuis son propre exchange.
 
 ### Dashboard Web
 

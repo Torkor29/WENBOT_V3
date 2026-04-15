@@ -26,8 +26,6 @@ class Settings(BaseSettings):
     db_url: str = "sqlite+aiosqlite:///./polybot.db"
     redis_url: str = "redis://redis:6379"
 
-    # On-ramp (card purchase)
-    transak_api_key: str = ""
 
     # Execution tuning
     max_concurrent_trades: int = Field(default=20, ge=1, le=200)
