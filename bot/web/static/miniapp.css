@@ -425,3 +425,100 @@ body {
   .stat-value { font-size: 18px; }
   .card { padding: 12px; }
 }
+
+/* ── Forms ── */
+.input {
+  width: 100%;
+  padding: 12px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  color: var(--tg-text);
+  font-size: 15px;
+  font-family: inherit;
+}
+.input:focus { outline: none; border-color: var(--tg-btn); }
+.input-mono { font-family: "SF Mono", "Fira Code", monospace; font-size: 13px; }
+textarea.input { resize: vertical; min-height: 60px; }
+
+.label {
+  display: block;
+  font-size: 12px;
+  color: var(--tg-hint);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.form-row { margin-bottom: 14px; }
+
+/* ── Danger card ── */
+.danger-card {
+  background: rgba(255,59,48,0.1);
+  border: 1px solid rgba(255,59,48,0.3);
+  border-radius: var(--card-radius);
+  padding: 16px;
+  margin-bottom: var(--gap);
+}
+.danger-card h3 { color: var(--red); margin-bottom: 8px; font-size: 16px; }
+.danger-card p { font-size: 14px; line-height: 1.5; }
+
+/* ── Modal ── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: fadeIn 0.15s ease;
+}
+.modal {
+  background: var(--tg-secondary);
+  border-radius: 16px;
+  padding: 20px;
+  max-width: 360px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal h3 { font-size: 17px; font-weight: 600; }
+
+/* ── Toast ── */
+.toast {
+  position: fixed;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--green);
+  color: white;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 300;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  animation: slideDown 0.2s ease;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translate(-50%, -20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ── Select ── */
+select.input {
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 18px;
+  padding-right: 36px;
+}
+
+.list-item .list-left { cursor: pointer; }
+
+/* Tab bar avec 6 items */
+.tab-bar a { font-size: 9px; }
+.tab-bar a .tab-icon { font-size: 20px; }
