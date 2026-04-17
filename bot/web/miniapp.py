@@ -14,7 +14,6 @@ from bot.models.trade import Trade, TradeStatus, TradeSide
 from bot.models.settings import UserSettings
 from bot.models.strategy import Strategy, StrategyStatus, StrategyVisibility
 from bot.models.subscription import Subscription
-from bot.models.strategy_user_settings import StrategyUserSettings
 from bot.web.auth import validate_init_data
 
 logger = logging.getLogger(__name__)

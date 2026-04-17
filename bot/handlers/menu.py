@@ -16,45 +16,36 @@ logger = logging.getLogger(__name__)
 
 
 def _build_hub_menu(tg_user, user) -> tuple[str, list]:
-    """Build the HUB screen — choose between Copy Wallet and Strategies."""
-    # Copy wallet stats
-    us = user.settings
-    traders_count = len(us.followed_wallets) if us and us.followed_wallets else 0
-    copy_wallet = f"`{user.wallet_address[:6]}...{user.wallet_address[-4:]}`" if user.wallet_address else "Non configuré"
-
-    # Strategy stats
-    active_strat = sum(1 for s in (user.subscriptions or []) if s.is_active)
-    strat_wallet = f"`{user.strategy_wallet_address[:6]}...{user.strategy_wallet_address[-4:]}`" if user.strategy_wallet_address else "Non configuré"
+    """Build the HUB screen — Mini App as primary interface."""
+    from bot.config import settings as _cfg
 
     text = (
-        f"🏠 **WENBOT FUSION**\n"
+        f"🏠 **WENPOLYMARKET**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Bonjour **{tg_user.first_name}** !\n"
-        "Choisissez votre service :\n\n"
-        f"👛 **Copy Wallet** — {traders_count} trader(s) suivi(s)\n"
-        f"   📬 {copy_wallet}\n\n"
-        f"📊 **Stratégies** — {active_strat} abonnement(s) actif(s)\n"
-        f"   📬 {strat_wallet}\n"
+        f"Bonjour **{tg_user.first_name}** !\n\n"
     )
 
     keyboard = []
 
-    # Mini App button (if configured with HTTPS URL)
-    from bot.config import settings as _cfg
     if _cfg.miniapp_url:
         from telegram import WebAppInfo
+        text += (
+            "Ouvrez l'app pour accéder à votre dashboard, "
+            "vos positions, stratégies et paramètres.\n"
+        )
         keyboard.append([InlineKeyboardButton(
             "📱 Ouvrir l'App", web_app=WebAppInfo(url=_cfg.miniapp_url)
         )])
-
-    keyboard += [
-        [InlineKeyboardButton("👛 Copy de Wallet", callback_data="hub_copy")],
-        [InlineKeyboardButton("📊 Suivi de Stratégies", callback_data="hub_strat")],
-        [InlineKeyboardButton("📊 Mon groupe", callback_data="menu_mygroup")],
-    ]
+    else:
+        # Fallback if no miniapp URL configured
+        text += "Choisissez votre service :\n"
+        keyboard += [
+            [InlineKeyboardButton("👛 Copy de Wallet", callback_data="hub_copy")],
+            [InlineKeyboardButton("📊 Suivi de Stratégies", callback_data="hub_strat")],
+        ]
 
     if not user.wallet_address and not user.strategy_wallet_address:
-        keyboard.insert(0 if not _cfg.miniapp_url else 1, [InlineKeyboardButton(
+        keyboard.append([InlineKeyboardButton(
             "🧭 Configurer mon wallet", callback_data="onboard_start"
         )])
 
