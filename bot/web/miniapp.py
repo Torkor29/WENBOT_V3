@@ -19,7 +19,7 @@ from bot.models.strategy import Strategy, StrategyStatus, StrategyVisibility
 from bot.models.subscription import Subscription
 from bot.services.crypto import decrypt_private_key, encrypt_private_key
 from bot.services.user_service import save_wallet, get_or_create_strategy_settings
-from bot.services.web3_client import web3_client
+from bot.services.web3_client import polygon_client as web3_client
 from bot.web.auth import validate_init_data
 
 logger = logging.getLogger(__name__)
@@ -211,10 +211,18 @@ async def wallet_withdraw(body: WithdrawReq, user: User = Depends(get_current_us
     except Exception:
         raise HTTPException(500, "Impossible de déchiffrer la clé")
     try:
-        tx_hash = await web3_client.transfer_usdc(pk, body.to_address, body.amount)
+        result = await web3_client.transfer_usdc(
+            from_address=user.wallet_address,
+            to_address=body.to_address,
+            amount_usdc=body.amount,
+            private_key=pk,
+        )
     except Exception as e:
         logger.error(f"withdraw failed for user {user.id}: {e}")
         raise HTTPException(500, f"Transaction échouée: {e}")
+    if not getattr(result, "success", False):
+        raise HTTPException(500, getattr(result, "error", None) or "Transaction échouée")
+    tx_hash = getattr(result, "tx_hash", None) or ""
     logger.info(f"User {user.id} withdrew {body.amount} USDC to {body.to_address} — tx {tx_hash}")
     return {"tx_hash": tx_hash}
 
