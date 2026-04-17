@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # Ex: https://dashboard.monbot.com — sinon on affiche localhost:<port>
     dashboard_url: str = ""
 
+    # Mini App — public HTTPS URL for Telegram WebApp button
+    # Ex: https://bot.mondomaine.com/miniapp
+    # Required for the WebApp button to work (Telegram requires HTTPS)
+    miniapp_url: str = ""
+
     # UI / Branding
     # URL d'une bannière (logo) pour le message d'accueil Telegram
     welcome_banner_url: str = ""
@@ -76,7 +81,7 @@ class Settings(BaseSettings):
     topic_alerts_id: int = 0         # Thread ID for 🚨 Alerts topic
     topic_admin_id: int = 0          # Thread ID for ⚙️ Admin topic
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

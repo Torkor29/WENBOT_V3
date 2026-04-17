@@ -1,4 +1,4 @@
-"""FastAPI dashboard — read-only web interface for trade monitoring."""
+"""FastAPI dashboard + Mini App — web interface for trade monitoring."""
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 
 from bot.db.session import async_session
@@ -14,12 +15,25 @@ from bot.models.trade import Trade, TradeStatus, TradeSide
 from bot.models.fee import FeeRecord
 from bot.models.user import User, UserRole
 from bot.models.settings import UserSettings
+from bot.web.miniapp import router as miniapp_router
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="WENPOLYMARKET Dashboard", docs_url=None, redoc_url=None)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
+
+# ── Mini App: API router + static files ──────────────────────────
+app.include_router(miniapp_router)
+app.mount("/miniapp/static", StaticFiles(directory=str(STATIC_DIR)), name="miniapp_static")
+
+
+@app.get("/miniapp", response_class=HTMLResponse)
+async def miniapp_page():
+    """Serve the Mini App SPA."""
+    html_path = STATIC_DIR / "miniapp.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
 
 @app.get("/", response_class=HTMLResponse)

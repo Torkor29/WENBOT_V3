@@ -37,14 +37,24 @@ def _build_hub_menu(tg_user, user) -> tuple[str, list]:
         f"   📬 {strat_wallet}\n"
     )
 
-    keyboard = [
+    keyboard = []
+
+    # Mini App button (if configured with HTTPS URL)
+    from bot.config import settings as _cfg
+    if _cfg.miniapp_url:
+        from telegram import WebAppInfo
+        keyboard.append([InlineKeyboardButton(
+            "📱 Ouvrir l'App", web_app=WebAppInfo(url=_cfg.miniapp_url)
+        )])
+
+    keyboard += [
         [InlineKeyboardButton("👛 Copy de Wallet", callback_data="hub_copy")],
         [InlineKeyboardButton("📊 Suivi de Stratégies", callback_data="hub_strat")],
         [InlineKeyboardButton("📊 Mon groupe", callback_data="menu_mygroup")],
     ]
 
     if not user.wallet_address and not user.strategy_wallet_address:
-        keyboard.insert(0, [InlineKeyboardButton(
+        keyboard.insert(0 if not _cfg.miniapp_url else 1, [InlineKeyboardButton(
             "🧭 Configurer mon wallet", callback_data="onboard_start"
         )])
 
