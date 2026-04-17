@@ -390,6 +390,36 @@ body {
   color: var(--tg-hint);
 }
 
+/* ── Light mode fixes ── */
+@media (prefers-color-scheme: light) {
+  :root {
+    --tg-bg: var(--tg-theme-bg-color, #ffffff);
+    --tg-text: var(--tg-theme-text-color, #1c1c1e);
+    --tg-hint: var(--tg-theme-hint-color, #8e8e93);
+    --tg-link: var(--tg-theme-link-color, #007aff);
+    --tg-btn: var(--tg-theme-button-color, #007aff);
+    --tg-btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --tg-secondary: var(--tg-theme-secondary-bg-color, #f2f2f7);
+    --tg-header: var(--tg-theme-header-bg-color, #f8f8f8);
+  }
+
+  .header {
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+  }
+
+  .tab-bar {
+    border-top: 1px solid rgba(0,0,0,0.1);
+  }
+
+  .list-item {
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+
+  .toggle .slider {
+    background: rgba(0,0,0,0.15);
+  }
+}
+
 /* ── Responsive ── */
 @media (max-width: 360px) {
   .stat-value { font-size: 18px; }

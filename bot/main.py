@@ -586,7 +586,7 @@ async def main() -> None:
             dashboard_app,
             host="0.0.0.0",
             port=settings.dashboard_port,
-            log_level="warning",
+            log_level="info",
         )
         dashboard_server = uvicorn.Server(config)
         asyncio.create_task(dashboard_server.serve())

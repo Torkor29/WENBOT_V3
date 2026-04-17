@@ -14,10 +14,30 @@ document.addEventListener("DOMContentLoaded", () => {
     tg.ready();
     tg.expand();
     APP.initData = tg.initData || "";
+    // Apply Telegram theme colors to body
+    if (tg.themeParams) {
+      document.body.style.background = tg.themeParams.bg_color || "";
+      document.body.style.color = tg.themeParams.text_color || "";
+    }
   }
 
   // Resolve base URL (same origin)
   APP.baseUrl = window.location.origin;
+
+  // Debug: show status if no initData
+  if (!APP.initData) {
+    const app = document.getElementById("app");
+    app.innerHTML = `
+      <div style="padding:40px 20px;text-align:center;">
+        <h2 style="color:#ff3b30;margin-bottom:16px;">Ouvrez depuis Telegram</h2>
+        <p style="color:#666;font-size:14px;">
+          Cette app doit être ouverte via le bouton dans le bot Telegram.<br><br>
+          Origin: ${window.location.origin}<br>
+          initData: (vide)
+        </p>
+      </div>`;
+    return;
+  }
 
   // Router
   window.addEventListener("hashchange", route);
@@ -96,11 +116,11 @@ function showLoading(container) {
 
 function showError(container, msg) {
   container.innerHTML = `
-    <div class="empty-state">
-      <div class="empty-icon">&#9888;</div>
-      <p>${escHtml(msg)}</p>
-      <br>
-      <button class="btn btn-secondary btn-sm" onclick="route()">Rafraichir</button>
+    <div style="padding:40px 20px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">&#9888;&#65039;</div>
+      <p style="color:#ff3b30;font-size:16px;font-weight:600;margin-bottom:12px;">Erreur</p>
+      <p style="color:#666;font-size:14px;margin-bottom:20px;word-break:break-word;">${escHtml(msg)}</p>
+      <button class="btn btn-primary" onclick="route()" style="max-width:200px;margin:0 auto;">Rafraichir</button>
     </div>`;
 }
 
