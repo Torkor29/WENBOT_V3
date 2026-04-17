@@ -888,9 +888,36 @@ select.input {
   .hero { background: linear-gradient(135deg, var(--card-bg) 0%, rgba(0,122,255,0.06) 100%); }
 }
 
+/* ── Mode banner Paper/Live ── */
+.mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.mode-banner span { font-size: 28px; line-height: 1; flex-shrink: 0; }
+.mode-banner .mode-title { font-size: 14px; font-weight: 700; letter-spacing: 0.5px; }
+.mode-banner .mode-sub { font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; }
+.mode-banner.paper {
+  background: linear-gradient(135deg, rgba(255,159,10,0.15) 0%, rgba(255,159,10,0.08) 100%);
+  border: 1px solid rgba(255,159,10,0.3);
+  color: var(--orange);
+}
+.mode-banner.paper .mode-sub { color: var(--tg-hint); }
+.mode-banner.live {
+  background: linear-gradient(135deg, rgba(52,199,89,0.15) 0%, rgba(52,199,89,0.08) 100%);
+  border: 1px solid rgba(52,199,89,0.3);
+  color: var(--green);
+}
+.mode-banner.live .mode-sub { color: var(--tg-hint); }
+
 /* ── Responsive ── */
 @media (max-width: 340px) {
   .hero-value { font-size: 32px; }
   .stat-value { font-size: 17px; }
   .tab-bar a { font-size: 9px; }
+  .mode-banner span { font-size: 22px; }
 }

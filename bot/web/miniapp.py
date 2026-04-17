@@ -1,9 +1,11 @@
 """Telegram Mini App — FastAPI router with all API endpoints."""
 
 import logging
+import urllib.parse
 from datetime import datetime, timedelta, date
 from typing import Optional, Any
 
+import httpx
 from eth_account import Account
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
@@ -149,6 +151,14 @@ class SubscriptionPatch(BaseModel):
 class ScoringProfileReq(BaseModel):
     profile: str  # prudent | balanced | aggressive
 
+class ModeChangeReq(BaseModel):
+    paper_trading: bool
+    confirm_live: bool = False
+
+class TraderFilterReq(BaseModel):
+    wallet: str
+    excluded_categories: list[str] = []
+
 
 # Profile presets
 SCORING_PROFILES = {
@@ -231,7 +241,9 @@ async def get_me(user: User = Depends(get_current_user)):
         "is_active": u.is_active,
         "is_paused": u.is_paused,
         "paper_trading": u.paper_trading,
+        "live_mode_confirmed": getattr(u, "live_mode_confirmed", False),
         "paper_balance": round(u.paper_balance, 2) if u.paper_balance else 0,
+        "paper_initial_balance": round(getattr(u, "paper_initial_balance", 1000) or 1000, 2),
         "daily_limit_usdc": u.daily_limit_usdc,
         "daily_spent_usdc": round(u.daily_spent_usdc, 2) if u.daily_spent_usdc else 0,
         "followed_wallets_count": followed_count,
@@ -899,14 +911,13 @@ async def apply_scoring_profile(body: ScoringProfileReq, user: User = Depends(ge
 # ─────────────────────────────────────────────────────────────────
 @router.get("/analytics/traders")
 async def analytics_traders(user: User = Depends(get_current_user)):
-    """Stats détaillées par trader suivi: win rate, streaks, PnL, catégorisation."""
+    """Stats détaillées par trader suivi: win rate, streaks, PnL, catégories fortes/faibles."""
     async with async_session() as session:
         u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
         wallets = (u.settings.followed_wallets or []) if u.settings else []
         traders = []
         for w in wallets:
             wl = w.lower()
-            # Trades in last 30d
             cutoff = datetime.utcnow() - timedelta(days=30)
             trades = (await session.execute(select(Trade).where(
                 Trade.user_id == user.id, Trade.master_wallet == wl,
@@ -917,7 +928,8 @@ async def analytics_traders(user: User = Depends(get_current_user)):
             wins = sum(1 for t in settled if t.settlement_pnl > 0)
             losses = sum(1 for t in settled if t.settlement_pnl <= 0)
             pnl = sum(t.settlement_pnl for t in settled)
-            # Current streak
+
+            # Streak
             streak = 0; streak_type = None
             for t in settled[:20]:
                 is_win = t.settlement_pnl > 0
@@ -927,11 +939,40 @@ async def analytics_traders(user: User = Depends(get_current_user)):
                 else: break
             resolved = wins + losses
             wr = (wins / resolved * 100) if resolved else 0
+
             # Categorization
             if wr >= 60 and total >= 10: category = "hot"
             elif wr <= 40 and total >= 10: category = "cold"
             elif total >= 5: category = "warm"
             else: category = "new"
+
+            # Categories fortes / faibles (par market category/preffix si dispo)
+            # On utilise market_question/market_id pour inférer une catégorie basique
+            cat_perf: dict[str, list[float]] = {}
+            for t in settled:
+                q = (t.market_question or t.market_id or "").lower()
+                for tag in ("crypto", "politics", "sports", "elections", "nfl", "nba",
+                            "soccer", "football", "tennis", "boxing", "mma", "tech",
+                            "pop", "science", "culture", "weather", "economy"):
+                    if tag in q:
+                        cat_perf.setdefault(tag.capitalize(), []).append(float(t.settlement_pnl or 0))
+                        break
+                else:
+                    cat_perf.setdefault("Autre", []).append(float(t.settlement_pnl or 0))
+            cat_stats = []
+            for cat, pnls in cat_perf.items():
+                w_c = sum(1 for p in pnls if p > 0)
+                total_c = len(pnls)
+                cat_stats.append({
+                    "category": cat,
+                    "trades": total_c,
+                    "win_rate": round(w_c / total_c * 100, 1) if total_c else 0,
+                    "pnl": round(sum(pnls), 2),
+                })
+            cat_stats.sort(key=lambda x: x["pnl"], reverse=True)
+            strong = [c for c in cat_stats if c["win_rate"] >= 60 and c["trades"] >= 3][:3]
+            weak = [c for c in cat_stats if c["win_rate"] <= 40 and c["trades"] >= 3][:3]
+
             traders.append({
                 "wallet": w, "wallet_short": f"{w[:6]}...{w[-4:]}",
                 "total_trades_30d": total,
@@ -941,6 +982,8 @@ async def analytics_traders(user: User = Depends(get_current_user)):
                 "current_streak": streak,
                 "streak_type": "win" if streak_type else ("loss" if streak_type is False else None),
                 "category": category,
+                "strong_categories": strong,
+                "weak_categories": weak,
             })
         traders.sort(key=lambda t: t["pnl_30d"], reverse=True)
     return {"traders": traders}
@@ -1118,12 +1161,69 @@ async def report_by_market(user: User = Depends(get_current_user)):
     return {"markets": data[:50]}
 
 
-# HTML report - downloadable standalone page
+# HTML report - supports auth via Authorization header OR ?auth= query param
 @router.get("/reports/export.html", response_class=HTMLResponse)
-async def report_export_html(period: str = "week", user: User = Depends(get_current_user)):
+async def report_export_html(
+    request: Request,
+    period: str = "week",
+    auth: Optional[str] = None,
+):
+    init_data: Optional[str] = None
+    hdr = request.headers.get("Authorization", "")
+    if hdr.startswith("tma "):
+        init_data = hdr[4:]
+    if not init_data and auth:
+        try: init_data = urllib.parse.unquote(auth)
+        except Exception: pass
+    if not init_data:
+        return HTMLResponse("<h1>Auth requise</h1>", status_code=401)
+    tg_user_data = validate_init_data(init_data)
+    if not tg_user_data:
+        return HTMLResponse("<h1>Auth invalide</h1>", status_code=401)
+    async with async_session() as session:
+        u = (await session.execute(
+            select(User).where(User.telegram_id == int(tg_user_data.get("id")))
+        )).scalar_one_or_none()
+    if not u:
+        return HTMLResponse("<h1>User introuvable</h1>", status_code=404)
+    user = u
+
     d = await _collect_report_data(user.id, period)
-    by_trader = (await report_by_trader(user))["traders"]
-    by_market = (await report_by_market(user))["markets"]
+
+    # Compute trader breakdown directly
+    async with async_session() as session:
+        tr_rows = (await session.execute(select(
+            Trade.master_wallet,
+            func.count(Trade.id).label("trade_count"),
+            func.sum(Trade.gross_amount_usdc).label("volume"),
+            func.sum(Trade.settlement_pnl).label("pnl"),
+        ).where(
+            Trade.user_id == user.id, Trade.strategy_id == None,
+            Trade.status == TradeStatus.FILLED, Trade.master_wallet != None
+        ).group_by(Trade.master_wallet))).all()  # noqa: E711
+        mk_rows = (await session.execute(select(
+            Trade.market_id, Trade.market_question,
+            func.count(Trade.id).label("trade_count"),
+            func.sum(Trade.gross_amount_usdc).label("volume"),
+            func.sum(Trade.settlement_pnl).label("pnl"),
+        ).where(
+            Trade.user_id == user.id, Trade.status == TradeStatus.FILLED
+        ).group_by(Trade.market_id, Trade.market_question))).all()
+
+    by_trader = sorted([{
+        "wallet": r.master_wallet,
+        "wallet_short": f"{r.master_wallet[:6]}...{r.master_wallet[-4:]}",
+        "trade_count": r.trade_count or 0,
+        "volume": round(r.volume or 0, 2),
+        "pnl": round(r.pnl or 0, 2),
+    } for r in tr_rows], key=lambda x: x["pnl"], reverse=True)
+    by_market = sorted([{
+        "market_id": r.market_id,
+        "market_question": r.market_question or (r.market_id or "")[:40],
+        "trade_count": r.trade_count or 0,
+        "volume": round(r.volume or 0, 2),
+        "pnl": round(r.pnl or 0, 2),
+    } for r in mk_rows], key=lambda x: x["pnl"], reverse=True)
 
     def pnl_color(x): return "#34c759" if x > 0 else ("#ff3b30" if x < 0 else "#8e8e93")
     def sign(x): return f"{'+' if x >= 0 else ''}{x:.2f}"
@@ -1265,3 +1365,153 @@ async def report_export_html(period: str = "week", user: User = Depends(get_curr
 </div>
 </body></html>"""
     return HTMLResponse(content=html)
+
+
+# ─────────────────────────────────────────────────────────────────
+# USER MODE — Paper / Live switch (with double-confirm for live)
+# ─────────────────────────────────────────────────────────────────
+@router.post("/user/mode")
+async def user_mode(body: ModeChangeReq, user: User = Depends(get_current_user)):
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        if body.paper_trading:
+            # Switch to PAPER — safe, no confirmation
+            u.paper_trading = True
+            u.live_mode_confirmed = False
+            logger.info(f"User {user.id} switched to PAPER mode")
+        else:
+            # Switch to LIVE — requires explicit confirmation
+            if not body.confirm_live:
+                raise HTTPException(400, "Confirmation explicite requise pour passer en mode Live")
+            if not u.wallet_address or not u.encrypted_private_key:
+                raise HTTPException(400, "Configurez d'abord un wallet pour passer en Live")
+            u.paper_trading = False
+            u.live_mode_confirmed = True
+            logger.warning(f"⚠ User {user.id} switched to LIVE mode")
+        await session.commit()
+    return {"ok": True, "paper_trading": u.paper_trading, "live_mode_confirmed": u.live_mode_confirmed}
+
+
+# ─────────────────────────────────────────────────────────────────
+# DISCOVER — Top traders (Polymarket leaderboard)
+# ─────────────────────────────────────────────────────────────────
+@router.get("/discover/top-traders")
+async def discover_top_traders(
+    period: str = "month",  # day | week | month | all
+    limit: int = 20,
+    user: User = Depends(get_current_user),
+):
+    """Top traders du leaderboard Polymarket.
+
+    Période: day / week / month / all. Retourne adresse, volume, PnL si dispo.
+    """
+    # Polymarket data-api leaderboard endpoint
+    # https://lb-api.polymarket.com/profit
+    traders: list[dict] = []
+    err: Optional[str] = None
+    base_url = "https://lb-api.polymarket.com/profit"
+    params = {"window": period if period in ("day","week","month","all") else "month", "limit": min(limit, 50)}
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(base_url, params=params)
+            if r.status_code == 200:
+                data = r.json()
+                items = data if isinstance(data, list) else data.get("users", [])
+                for t in items[:limit]:
+                    addr = (t.get("proxyWallet") or t.get("walletAddress") or t.get("address") or "").lower()
+                    if not addr:
+                        continue
+                    traders.append({
+                        "wallet": addr,
+                        "wallet_short": f"{addr[:6]}...{addr[-4:]}" if len(addr) >= 10 else addr,
+                        "username": t.get("name") or t.get("username") or "",
+                        "pnl": round(float(t.get("profit") or t.get("pnl") or 0), 2),
+                        "volume": round(float(t.get("volume") or 0), 2),
+                        "trades_count": int(t.get("trades") or t.get("numTrades") or 0),
+                        "profile_image": t.get("profileImage") or "",
+                    })
+            else:
+                err = f"API retourne {r.status_code}"
+    except Exception as e:
+        logger.warning(f"discover_top_traders failed: {e}")
+        err = str(e)
+
+    # Mark which ones user already follows
+    followed = set()
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        if u.settings and u.settings.followed_wallets:
+            followed = {w.lower() for w in u.settings.followed_wallets}
+    for t in traders:
+        t["followed"] = t["wallet"] in followed
+
+    return {"traders": traders, "period": params["window"], "error": err}
+
+
+@router.get("/discover/trader/{wallet}/markets")
+async def discover_trader_markets(wallet: str, user: User = Depends(get_current_user)):
+    """Marchés récents d'un trader (positions ouvertes sur Polymarket)."""
+    wallet = wallet.lower().strip()
+    if not _is_valid_address(wallet):
+        raise HTTPException(400, "Adresse invalide")
+    markets: list[dict] = []
+    err: Optional[str] = None
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get("https://data-api.polymarket.com/positions",
+                                 params={"user": wallet, "limit": 25, "sortBy": "CURRENT", "sortDirection": "DESC"})
+            if r.status_code == 200:
+                data = r.json()
+                items = data if isinstance(data, list) else []
+                for p in items[:25]:
+                    markets.append({
+                        "market_question": p.get("title") or p.get("question") or "",
+                        "outcome": p.get("outcome") or "",
+                        "size": float(p.get("size") or 0),
+                        "entry_price": float(p.get("avgPrice") or 0),
+                        "current_price": float(p.get("curPrice") or 0),
+                        "pnl": round(float(p.get("realizedPnl") or 0) + float(p.get("cashPnl") or 0), 2),
+                        "initial_value": round(float(p.get("initialValue") or 0), 2),
+                        "current_value": round(float(p.get("currentValue") or 0), 2),
+                    })
+            else:
+                err = f"API {r.status_code}"
+    except Exception as e:
+        logger.warning(f"discover_trader_markets failed: {e}")
+        err = str(e)
+    return {"wallet": wallet, "markets": markets, "error": err}
+
+
+# ─────────────────────────────────────────────────────────────────
+# TRADER FILTERS — Exclure des catégories pour un trader donné
+# ─────────────────────────────────────────────────────────────────
+@router.get("/settings/trader-filters")
+async def get_trader_filters(user: User = Depends(get_current_user)):
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        s = u.settings
+    return {
+        "trader_filters": (s.trader_filters or {}) if s else {},
+        "global_categories": (s.categories or []) if s else [],
+        "global_blacklist": (s.blacklisted_markets or []) if s else [],
+    }
+
+
+@router.post("/settings/trader-filter")
+async def set_trader_filter(body: TraderFilterReq, user: User = Depends(get_current_user)):
+    w = body.wallet.strip().lower()
+    if not _is_valid_address(w):
+        raise HTTPException(400, "Adresse invalide")
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        s = u.settings
+        if not s: raise HTTPException(500, "Settings manquants")
+        filters = dict(s.trader_filters or {})
+        if body.excluded_categories:
+            filters[w] = {"excluded_categories": list(body.excluded_categories)}
+        else:
+            filters.pop(w, None)
+        s.trader_filters = filters
+        await session.commit()
+    return {"ok": True, "trader_filters": filters}
+
