@@ -1,4 +1,4 @@
-/* WENPOLYMARKET Mini App — v2 SPA */
+/* WENPOLYMARKET Mini App — v3 SPA */
 
 const tg = window.Telegram?.WebApp;
 const APP = { initData: tg?.initData || "", user: null, cache: new Map(), mainBtnHandler: null, backHandler: null };
@@ -89,21 +89,6 @@ function confirmModal(title, text, confirmText="Confirmer", variant="primary") {
   });
 }
 
-/* Bottom sheet */
-function sheet(contentHtml) {
-  return new Promise(resolve => {
-    const bd = document.createElement("div");
-    bd.className = "sheet-backdrop";
-    bd.innerHTML = `<div class="sheet">${contentHtml}</div>`;
-    document.body.appendChild(bd);
-    bd.addEventListener("click", e => { if (e.target === bd) { bd.remove(); resolve(null); } });
-    resolve({
-      el: bd.querySelector(".sheet"),
-      close: (v) => { bd.remove(); return v; },
-    });
-  });
-}
-
 /* ── Layout helpers ─────────────────────────────── */
 function render(html) { document.getElementById("content").innerHTML = html; }
 
@@ -125,12 +110,11 @@ function setBack(hash) {
   }
 }
 
-function setMainBtn(text, onClick, color) {
+function setMainBtn(text, onClick) {
   if (!tg?.MainButton) return;
   if (APP.mainBtnHandler) { try { tg.MainButton.offClick(APP.mainBtnHandler); } catch {} }
   APP.mainBtnHandler = () => { haptic("medium"); onClick(); };
   tg.MainButton.setText(text);
-  if (color) tg.MainButton.color = color;
   tg.MainButton.onClick(APP.mainBtnHandler);
   tg.MainButton.show();
 }
@@ -142,47 +126,32 @@ function clearMainBtn() {
   tg.MainButton.hide();
 }
 
-/* ── Components (HTML builders) ──────────────────── */
+/* ── Components ──────────────────────────────────── */
 const skeleton = (n=3) => `
   <div class="skeleton skeleton-hero"></div>
   <div class="stats" style="margin-bottom:12px">
     ${Array(4).fill(0).map(() => `<div class="skeleton skeleton-stat"></div>`).join("")}
   </div>
-  ${Array(n).fill(0).map(() => `
-    <div class="card">
-      <div class="skeleton skeleton-line wide"></div>
-      <div class="skeleton skeleton-line half"></div>
-    </div>`).join("")}
+  ${Array(n).fill(0).map(() => `<div class="card"><div class="skeleton skeleton-line wide"></div><div class="skeleton skeleton-line half"></div></div>`).join("")}
 `;
 
-const hero = (value, label, delta) => `
+const hero = (value, label, extra) => `
   <div class="hero">
-    <div class="hero-value ${pnlClass(parseFloat(value))}">${value}</div>
+    <div class="hero-value ${pnlClass(parseFloat(String(value).replace(/[^-0-9.]/g,'')))}">${value}</div>
     <div class="hero-label">${esc(label)}</div>
-    ${delta !== undefined && delta !== null
-      ? `<div class="hero-delta ${delta < 0 ? 'neg' : ''}">${fmtDelta(delta)}</div>` : ""}
+    ${extra ? `<div style="margin-top:8px">${extra}</div>` : ""}
   </div>`;
 
 const stat = (v, l, cls="") => `<div class="stat"><div class="stat-value ${cls}">${v}</div><div class="stat-label">${esc(l)}</div></div>`;
-
-const statsGrid = (items, cols=2) => `
-  <div class="stats ${cols===4?'cols-4':cols===3?'cols-3':''}">
-    ${items.map(i => stat(i.value, i.label, i.cls || "")).join("")}
-  </div>`;
+const statsGrid = (items, cols=2) => `<div class="stats ${cols===4?'cols-4':cols===3?'cols-3':''}">${items.map(i=>stat(i.value,i.label,i.cls||"")).join("")}</div>`;
 
 const subNav = (items, active) => `
   <div class="sub-nav">
-    ${items.map(i => `
-      <a href="#${i.href}" class="sub-nav-item ${i.href === active ? "active" : ""}" data-subnav>
-        ${esc(i.label)}${i.count != null ? ` <span class="sub-nav-count">${i.count}</span>` : ""}
-      </a>`).join("")}
+    ${items.map(i => `<a href="#${i.href}" class="sub-nav-item ${i.href === active ? "active" : ""}">${esc(i.label)}${i.count != null ? ` <span class="sub-nav-count">${i.count}</span>` : ""}</a>`).join("")}
   </div>`;
 
 const sectionTitle = (label, action) => `
-  <div class="section-title">
-    <h2>${esc(label)}</h2>
-    ${action ? `<a class="card-action" onclick="${action.onclick}">${esc(action.label)} ›</a>` : ""}
-  </div>`;
+  <div class="section-title"><h2>${esc(label)}</h2>${action ? `<a class="card-action" onclick="${action.onclick}">${esc(action.label)} ›</a>` : ""}</div>`;
 
 const emptyState = (icon, title, text, btn) => `
   <div class="empty">
@@ -203,7 +172,6 @@ const KNOWN_TABS = ["home", "copy", "strategies", "wallet", "more"];
 
 async function dispatch() {
   let hash = location.hash.slice(1);
-  // Ignore Telegram framework hash params (tgWebAppData=..., tgWebAppVersion=..., etc.)
   if (!hash || /tgwebapp/i.test(hash) || !KNOWN_TABS.includes(hash.split("/")[0])) {
     hash = "home";
     history.replaceState(null, "", "#home");
@@ -216,59 +184,55 @@ async function dispatch() {
       setBack(r.opts.back || null);
       clearMainBtn();
       window.scrollTo(0, 0);
-      try {
-        render(skeleton(2));
-        await r.handler(m);
-      } catch (e) {
-        showError(e.message);
-      }
+      try { render(skeleton(2)); await r.handler(m); }
+      catch (e) { showError(e.message); }
       return;
     }
   }
-  // No route matched a valid tab -> fall back to home
   history.replaceState(null, "", "#home");
   location.hash = "home";
 }
 
 function showError(msg) {
-  render(`
-    <div class="empty">
-      <div class="empty-icon">⚠️</div>
-      <div class="empty-title" style="color:var(--red)">Erreur</div>
-      <div class="empty-text">${esc(msg)}</div>
-      <button class="btn btn-secondary" style="max-width:200px;margin:0 auto" onclick="dispatch()">Réessayer</button>
-    </div>`);
+  render(`<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title" style="color:var(--red)">Erreur</div><div class="empty-text">${esc(msg)}</div><button class="btn btn-secondary" style="max-width:200px;margin:0 auto" onclick="dispatch()">Réessayer</button></div>`);
 }
 
 /* ═══════════════════════════════════════════════════
    SCREENS
 ═══════════════════════════════════════════════════ */
 
-/* ── HOME / Accueil ─────────────────────────────── */
+/* ── HOME ────────────────────────────────────────── */
 route(/^home$/, async () => {
   const me = APP.user;
-  const [copyStats, stratStats, week, recent] = await Promise.all([
+  const [copyStats, stratStats, week, recent, ctrl] = await Promise.all([
     cached("copy-stats", () => api("/copy/stats")),
     cached("strat-stats", () => api("/strategies/stats")),
     cached("pnl-week", () => api("/reports/pnl?period=week")),
     cached("recent", () => api("/copy/trades?limit=5")),
+    cached("ctrl-status", () => api("/controls/status"), 5000),
   ]);
-
   const totalPnl = (copyStats.total_pnl || 0) + (stratStats.total_pnl || 0);
 
-  let balanceHtml;
+  // Control banner
+  let ctrlBanner = "";
+  if (ctrl.state === "paused") {
+    ctrlBanner = `<div class="alert warning"><h4>⏸ Copy trading en pause</h4><p>Les nouveaux signaux sont ignorés. Les positions ouvertes restent actives.</p><button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="window._ctrlResume()">▶ Reprendre</button></div>`;
+  } else if (ctrl.state === "stopped") {
+    ctrlBanner = `<div class="alert"><h4>⏹ Copy trading arrêté</h4><p>Aucune activité automatique. Réactivez pour redémarrer.</p><button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="window._ctrlResume()">✓ Réactiver</button></div>`;
+  }
+
+  let balanceCard = "";
   if (me.wallet_address) {
     try {
       const bal = await cached("wallet-bal", () => api("/wallet/balance"), 15000);
-      balanceHtml = `
+      balanceCard = `
         <div class="card">
           <div class="card-header">
             <div class="tiny">Wallet Copy</div>
             <a class="card-action" onclick="go('wallet')">Gérer ›</a>
           </div>
           <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:10px">
-            <div><span style="font-size:22px;font-weight:700">${fmtUsd(bal.usdc)}</span>
-                 <span class="small" style="margin-left:4px">USDC</span></div>
+            <div><span style="font-size:22px;font-weight:700">${fmtUsd(bal.usdc)}</span><span class="small" style="margin-left:4px">USDC</span></div>
             <div class="small">${bal.matic.toFixed(4)} MATIC</div>
           </div>
           <div class="addr-box mono" onclick="copy('${bal.address}')">${shortAddr(bal.address)} · copier</div>
@@ -278,38 +242,41 @@ route(/^home$/, async () => {
           </div>
         </div>`;
     } catch {
-      balanceHtml = `<div class="card"><div class="small">Balance indisponible</div></div>`;
+      balanceCard = `<div class="card"><div class="small">Balance indisponible</div></div>`;
     }
   } else {
-    balanceHtml = `
-      <div class="alert info">
-        <h4>👛 Configurez votre wallet</h4>
-        <p>Créez ou importez un wallet Polygon pour commencer à copy-trader.</p>
-        <button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="go('wallet')">Configurer maintenant</button>
-      </div>`;
+    balanceCard = `<div class="alert info"><h4>👛 Configurez votre wallet</h4><p>Créez ou importez un wallet Polygon pour commencer.</p><button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="go('wallet')">Configurer maintenant</button></div>`;
   }
 
-  render(`
-    ${hero(fmtUsd(totalPnl), "PnL Total", week.trades > 0 ? null : undefined)}
+  // Quick control buttons
+  const controlRow = ctrl.state === "running" ? `
+    <button class="btn btn-secondary" onclick="window._ctrlPause()" style="margin-bottom:12px">⏸ Mettre en pause</button>
+  ` : "";
 
-    ${balanceHtml}
+  render(`
+    ${ctrlBanner}
+
+    ${hero(pnlSign(totalPnl), "PnL total")}
+
+    ${balanceCard}
+    ${controlRow}
 
     <div class="quick-grid">
       <button class="quick-action" onclick="go('copy/traders')">
         <div class="quick-action-icon">👥</div>
-        <div class="quick-action-label">Traders suivis</div>
+        <div class="quick-action-label">Traders · ${me.followed_wallets_count}</div>
       </button>
       <button class="quick-action" onclick="go('strategies')">
         <div class="quick-action-icon">🎯</div>
-        <div class="quick-action-label">Stratégies</div>
+        <div class="quick-action-label">Stratégies · ${me.active_subscriptions}</div>
       </button>
       <button class="quick-action" onclick="go('copy/positions')">
         <div class="quick-action-icon">📊</div>
-        <div class="quick-action-label">Positions</div>
+        <div class="quick-action-label">Positions · ${copyStats.open_positions}</div>
       </button>
-      <button class="quick-action" onclick="go('more/reports')">
+      <button class="quick-action" onclick="go('more/analytics')">
         <div class="quick-action-icon">📈</div>
-        <div class="quick-action-label">Rapports</div>
+        <div class="quick-action-label">Analytics</div>
       </button>
     </div>
 
@@ -344,42 +311,56 @@ route(/^home$/, async () => {
   `);
 });
 
-/* ── COPY ─────────────────────────────────────────── */
+window._ctrlPause = async function() {
+  const ok = await confirmModal("Mettre en pause ?", "Le copy trading s'arrêtera temporairement. Les positions ouvertes restent actives.", "Mettre en pause");
+  if (!ok) return;
+  await api("/controls/pause", {method:"POST"});
+  invalidate("ctrl"); toast("En pause"); dispatch();
+};
+
+window._ctrlResume = async function() {
+  await api("/controls/resume", {method:"POST"});
+  invalidate("ctrl"); toast("Reprise ✓"); dispatch();
+};
+
+window._ctrlStop = async function() {
+  const ok = await confirmModal("Arrêter le copy trading ?", "Le bot cessera toute activité. Vous pourrez réactiver quand vous voulez.", "Arrêter", "danger");
+  if (!ok) return;
+  await api("/controls/stop", {method:"POST"});
+  invalidate("ctrl"); toast("Arrêté"); dispatch();
+};
+
+/* ── COPY ──────────────────────────────────────── */
 route(/^copy$/, async () => { go("copy/traders"); });
 
 route(/^copy\/traders$/, async () => {
   const traders = await api("/copy/traders");
   const positions = await cached("copy-positions", () => api("/copy/positions"));
   const trades = await cached("copy-trades-20", () => api("/copy/trades?limit=20"));
-
   render(`
     <div class="page-title">Copy Trading</div>
     ${subNav([
       {label:"Traders", href:"copy/traders", count: traders.count},
       {label:"Positions", href:"copy/positions", count: positions.count},
-      {label:"Historique", href:"copy/history", count: trades.count || null},
+      {label:"Historique", href:"copy/history"},
     ], "copy/traders")}
-
     ${traders.count === 0
       ? emptyState("👥", "Aucun trader suivi", "Ajoutez un wallet Polygon pour copier ses trades automatiquement.",
           {label:"+ Ajouter un trader", onclick:"go('copy/traders/add')"})
-      : `
-        <div class="card card-flush">
-          <div class="list">
-            ${traders.traders.map(t => `
-              <div class="list-item" onclick="go('copy/trader/${t.wallet}')">
-                <div class="avatar">${t.wallet_short.slice(2,4).toUpperCase()}</div>
-                <div class="list-body">
-                  <div class="list-title mono">${t.wallet_short}</div>
-                  <div class="list-sub">${t.trade_count} trades · ${fmtUsd(t.volume)}</div>
-                </div>
-                <div class="list-right">
-                  <div class="${pnlClass(t.pnl)}" style="font-weight:600">${pnlSign(t.pnl)}</div>
-                  <div class="list-chevron">›</div>
-                </div>
-              </div>`).join("")}
-          </div>
-        </div>
+      : `<div class="card card-flush"><div class="list">
+          ${traders.traders.map(t => `
+            <div class="list-item" onclick="go('copy/trader/${t.wallet}')">
+              <div class="avatar">${t.wallet_short.slice(2,4).toUpperCase()}</div>
+              <div class="list-body">
+                <div class="list-title mono">${t.wallet_short}</div>
+                <div class="list-sub">${t.trade_count} trades · ${fmtUsd(t.volume)}</div>
+              </div>
+              <div class="list-right">
+                <div class="${pnlClass(t.pnl)}" style="font-weight:600">${pnlSign(t.pnl)}</div>
+                <div class="list-chevron">›</div>
+              </div>
+            </div>`).join("")}
+        </div></div>
         <button class="btn btn-primary" style="margin-top:12px" onclick="go('copy/traders/add')">+ Ajouter un trader</button>`
     }
   `);
@@ -395,15 +376,14 @@ route(/^copy\/positions$/, async () => {
       {label:"Positions", href:"copy/positions", count: count},
       {label:"Historique", href:"copy/history"},
     ], "copy/positions")}
-
     ${count === 0
-      ? emptyState("📭", "Aucune position ouverte", "Les positions actives apparaîtront ici dès qu'un trade sera copié.")
+      ? emptyState("📭", "Aucune position ouverte", "Les positions apparaîtront ici dès qu'un trade sera copié.")
       : `<div class="card card-flush"><div class="list">${positions.map(p => `
           <div class="list-item">
             <div class="list-icon">💼</div>
             <div class="list-body">
               <div class="list-title">${esc(p.market_question)}</div>
-              <div class="list-sub">${p.shares.toFixed(2)} shares @ ${p.price.toFixed(4)} · ${p.master_wallet}</div>
+              <div class="list-sub">${p.shares.toFixed(2)} @ ${p.price.toFixed(4)} · ${p.master_wallet}</div>
             </div>
             <div class="list-right">
               <div style="font-weight:600">${fmtUsd(p.amount)}</div>
@@ -458,12 +438,8 @@ route(/^copy\/traders\/add$/, async () => {
   setMainBtn("SUIVRE CE TRADER", async () => {
     const w = document.getElementById("addr").value.trim();
     if (!w) return toast("Adresse requise", "error");
-    try {
-      await api("/copy/traders/add", {method:"POST", body:{wallet: w}});
-      invalidate("copy-");
-      toast("Trader ajouté");
-      go("copy/traders");
-    } catch (e) { toast(e.message, "error"); }
+    try { await api("/copy/traders/add", {method:"POST", body:{wallet: w}}); invalidate("copy-"); toast("Trader ajouté"); go("copy/traders"); }
+    catch (e) { toast(e.message, "error"); }
   });
 }, {tab: "copy"});
 
@@ -476,12 +452,12 @@ route(/^copy\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
       <div class="h2 mono">${shortAddr(wallet)}</div>
       <div class="small" style="margin-top:2px">${d.trade_count} trades copiés</div>
     </div>
-
     ${statsGrid([
       {value: fmtUsd(d.volume), label: "Volume"},
       {value: pnlSign(d.pnl), label: "PnL", cls: pnlClass(d.pnl)},
-    ])}
-
+      {value: d.wins + "/" + d.losses, label: "W / L"},
+      {value: fmtPct(d.win_rate), label: "Win rate"},
+    ], 4)}
     <div class="section">
       ${sectionTitle("Derniers trades")}
       ${d.recent_trades.length === 0
@@ -494,17 +470,12 @@ route(/^copy\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
                 <div class="list-sub">${badge(t.side, t.side==='BUY'?'green':'red')} @ ${t.price.toFixed(4)} · ${timeAgo(t.created_at)}</div>
               </div>
               <div class="list-right">
-                ${t.pnl !== null
-                  ? `<span class="${pnlClass(t.pnl)}">${pnlSign(t.pnl)}</span>`
-                  : `<span>${fmtUsd(t.amount)}</span>`}
+                ${t.pnl !== null ? `<span class="${pnlClass(t.pnl)}">${pnlSign(t.pnl)}</span>` : `<span>${fmtUsd(t.amount)}</span>`}
               </div>
             </div>`).join("")}</div></div>`}
     </div>
-
     <div class="section">
-      <div class="card">
-        <div class="addr-box mono" onclick="copy('${wallet}')">${wallet}</div>
-      </div>
+      <div class="card"><div class="addr-box mono" onclick="copy('${wallet}')">${wallet}</div></div>
       <button class="btn btn-danger" style="margin-top:10px" onclick="window._trUnfollow('${wallet}')">🗑 Ne plus suivre</button>
     </div>
   `);
@@ -515,9 +486,7 @@ window._trUnfollow = async function(wallet) {
   const ok = await confirmModal("Arrêter de suivre ?", shortAddr(wallet) + " — vos positions existantes ne seront pas affectées.", "Retirer", "danger");
   if (!ok) return;
   await api("/copy/traders/" + wallet, {method:"DELETE"});
-  invalidate("copy-");
-  toast("Trader retiré");
-  go("copy/traders");
+  invalidate("copy-"); toast("Trader retiré"); go("copy/traders");
 };
 
 /* ── STRATEGIES ───────────────────────────────────── */
@@ -529,33 +498,23 @@ route(/^strategies$/, async () => {
   ]);
   const activeSubs = subscriptions.filter(s => s.is_active);
   const me = APP.user;
-
   let walletBanner = "";
   if (!me.strategy_wallet_address && activeSubs.length > 0) {
-    walletBanner = `
-      <div class="alert warning">
-        <h4>⚠ Wallet stratégie manquant</h4>
-        <p>Vous êtes abonné à ${activeSubs.length} stratégie(s) mais n'avez pas encore configuré de wallet dédié.</p>
-        <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="go('more/strategy-wallet')">Configurer</button>
-      </div>`;
+    walletBanner = `<div class="alert warning"><h4>⚠ Wallet stratégie manquant</h4><p>Vous êtes abonné à ${activeSubs.length} stratégie(s) mais n'avez pas encore configuré de wallet dédié.</p><button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="go('more/strategy-wallet')">Configurer</button></div>`;
   }
-
   render(`
     <div class="page-title">Stratégies</div>
     ${subNav([
       {label:"Disponibles", href:"strategies", count: strategies.length},
       {label:"Mes abonnements", href:"strategies/my", count: activeSubs.length},
     ], "strategies")}
-
     ${walletBanner}
-
     ${statsGrid([
       {value: pnlSign(stats.total_pnl), label: "PnL", cls: pnlClass(stats.total_pnl)},
       {value: fmtPct(stats.win_rate), label: "Win rate"},
       {value: stats.total_trades, label: "Trades"},
       {value: activeSubs.length, label: "Abonnements"},
     ], 4)}
-
     <div class="section">
       ${strategies.length === 0
         ? emptyState("🎯", "Aucune stratégie disponible", "Les stratégies publiques seront listées ici dès leur activation.")
@@ -567,18 +526,9 @@ route(/^strategies$/, async () => {
             </div>
             ${s.description ? `<div class="small" style="margin-bottom:12px;line-height:1.5">${esc(s.description)}</div>` : ""}
             <div class="stats-inline">
-              <div class="stat-mini">
-                <div class="stat-value ${pnlClass(s.total_pnl)}">${pnlSign(s.total_pnl)}</div>
-                <div class="stat-label">PnL</div>
-              </div>
-              <div class="stat-mini">
-                <div class="stat-value">${fmtPct(s.win_rate)}</div>
-                <div class="stat-label">Win rate</div>
-              </div>
-              <div class="stat-mini">
-                <div class="stat-value">${s.total_trades}</div>
-                <div class="stat-label">Trades</div>
-              </div>
+              <div class="stat-mini"><div class="stat-value ${pnlClass(s.total_pnl)}">${pnlSign(s.total_pnl)}</div><div class="stat-label">PnL</div></div>
+              <div class="stat-mini"><div class="stat-value">${fmtPct(s.win_rate)}</div><div class="stat-label">Win rate</div></div>
+              <div class="stat-mini"><div class="stat-value">${s.total_trades}</div><div class="stat-label">Trades</div></div>
             </div>
           </div>`).join("")}
     </div>
@@ -587,16 +537,13 @@ route(/^strategies$/, async () => {
 
 route(/^strategies\/my$/, async () => {
   const [{strategies}, {subscriptions}] = await Promise.all([api("/strategies"), api("/strategies/subscriptions")]);
-  const stats = await cached("strat-stats", () => api("/strategies/stats"));
   const activeSubs = subscriptions.filter(s => s.is_active);
-
   render(`
     <div class="page-title">Stratégies</div>
     ${subNav([
       {label:"Disponibles", href:"strategies", count: strategies.length},
       {label:"Mes abonnements", href:"strategies/my", count: activeSubs.length},
     ], "strategies/my")}
-
     ${subscriptions.length === 0
       ? emptyState("📭", "Aucun abonnement", "Abonnez-vous à une stratégie pour commencer.", {label:"Voir les stratégies", onclick:"go('strategies')"})
       : `<div class="card card-flush"><div class="list">${subscriptions.map(s => `
@@ -608,23 +555,7 @@ route(/^strategies\/my$/, async () => {
             </div>
             <div class="list-chevron">›</div>
           </div>`).join("")}</div></div>`}
-
-    <div class="section">
-      ${sectionTitle("Dernières exécutions")}
-      <div class="card">
-        <div class="btn-row">
-          <div class="stat" style="padding:12px 8px">
-            <div class="stat-value">${stats.wins}/${stats.resolved}</div>
-            <div class="stat-label">W / L</div>
-          </div>
-          <div class="stat" style="padding:12px 8px">
-            <div class="stat-value ${pnlClass(stats.total_pnl)}">${pnlSign(stats.total_pnl)}</div>
-            <div class="stat-label">PnL cumulé</div>
-          </div>
-        </div>
-        <button class="btn btn-secondary" style="margin-top:10px" onclick="go('strategies/history')">Historique détaillé ›</button>
-      </div>
-    </div>
+    <button class="btn btn-secondary" style="margin-top:12px" onclick="go('strategies/history')">📜 Historique</button>
   `);
 }, {tab: "strategies"});
 
@@ -633,7 +564,7 @@ route(/^strategies\/history$/, async () => {
   render(`
     <div class="page-title">Historique stratégies</div>
     ${trades.length === 0
-      ? emptyState("📜", "Aucun trade", "Les exécutions de stratégies apparaîtront ici.")
+      ? emptyState("📜", "Aucun trade", "Les exécutions apparaîtront ici.")
       : `<div class="card card-flush"><div class="list">${trades.map(t => `
           <div class="list-item">
             <div class="list-icon">${t.result==='WON'?'✅':t.result==='LOST'?'❌':'⏳'}</div>
@@ -642,9 +573,7 @@ route(/^strategies\/history$/, async () => {
               <div class="list-sub">${esc(t.strategy_id)} · ${t.shares.toFixed(1)} @ ${t.price.toFixed(4)} · ${timeAgo(t.created_at)}</div>
             </div>
             <div class="list-right">
-              ${t.pnl !== null
-                ? `<div class="${pnlClass(t.pnl)}" style="font-weight:600">${pnlSign(t.pnl)}</div>`
-                : `<div>${fmtUsd(t.amount)}</div>`}
+              ${t.pnl !== null ? `<div class="${pnlClass(t.pnl)}" style="font-weight:600">${pnlSign(t.pnl)}</div>` : `<div>${fmtUsd(t.amount)}</div>`}
             </div>
           </div>`).join("")}</div></div>`}
   `);
@@ -655,24 +584,20 @@ window._stratOpen = async function(id) {
   const {strategies} = await api("/strategies");
   const s = strategies.find(x => x.id === id);
   if (!s) return toast("Stratégie introuvable", "error");
-
   const bd = document.createElement("div");
   bd.className = "sheet-backdrop";
   bd.innerHTML = `
     <div class="sheet">
       <h3>${esc(s.name)}</h3>
       ${s.description ? `<div class="sheet-sub">${esc(s.description)}</div>` : ""}
-
       <div class="stats" style="margin-bottom:16px">
         ${stat(pnlSign(s.total_pnl), "PnL", pnlClass(s.total_pnl))}
         ${stat(fmtPct(s.win_rate), "Win rate")}
       </div>
-
       <div class="form-row">
         <label class="label">Taille par trade (${s.min_trade_size} – ${s.max_trade_size} USDC)</label>
         <input class="input" id="ts" type="number" step="0.5" min="${s.min_trade_size}" max="${s.max_trade_size}" value="${s.my_trade_size || s.min_trade_size}">
       </div>
-
       ${s.subscribed
         ? `<button class="btn btn-primary" id="save">💾 Mettre à jour</button>
            <button class="btn btn-danger" id="unsub" style="margin-top:8px">Désinscrire</button>`
@@ -682,10 +607,8 @@ window._stratOpen = async function(id) {
   document.body.appendChild(bd);
   bd.addEventListener("click", e => { if (e.target === bd) bd.remove(); });
   bd.querySelector("#close").onclick = () => bd.remove();
-
   const size = () => parseFloat(bd.querySelector("#ts").value);
   const done = () => { bd.remove(); invalidate("strat"); dispatch(); };
-
   if (s.subscribed) {
     bd.querySelector("#save").onclick = async () => {
       try { await api(`/strategies/${id}/subscription`, {method:"PATCH", body:{trade_size: size()}}); toast("Mis à jour"); done(); }
@@ -711,7 +634,7 @@ route(/^wallet$/, async () => {
   if (!me.wallet_address) {
     render(`
       <div class="page-title">Wallet</div>
-      ${emptyState("👛", "Aucun wallet", "Créez un nouveau wallet Polygon ou importez une clé privée existante pour commencer.")}
+      ${emptyState("👛", "Aucun wallet", "Créez un nouveau wallet Polygon ou importez une clé privée existante.")}
       <button class="btn btn-primary" onclick="go('wallet/create')">✨ Créer un wallet</button>
       <button class="btn btn-secondary" style="margin-top:10px" onclick="go('wallet/import')">📥 Importer une clé</button>
     `);
@@ -720,41 +643,30 @@ route(/^wallet$/, async () => {
   const bal = await api("/wallet/balance").catch(() => ({usdc:0, matic:0, address:me.wallet_address}));
   render(`
     <div class="page-title">Wallet</div>
-
     <div class="hero">
       <div class="hero-value">${fmtUsd(bal.usdc)}</div>
       <div class="hero-label">USDC disponible</div>
-      <div class="small" style="margin-top:10px">${bal.matic.toFixed(4)} MATIC · gas disponible</div>
+      <div class="small" style="margin-top:10px">${bal.matic.toFixed(4)} MATIC</div>
     </div>
-
     <div class="card">
       <div class="tiny" style="margin-bottom:8px">Adresse Polygon</div>
       <div class="addr-box mono" onclick="copy('${bal.address}')">${bal.address}</div>
-      <div class="input-hint" style="margin-top:6px">Appuyez pour copier</div>
     </div>
-
     <div class="btn-row">
       <button class="btn btn-primary" onclick="go('wallet/deposit')">📥 Déposer</button>
       <button class="btn btn-secondary" onclick="go('wallet/withdraw')">📤 Retirer</button>
     </div>
-
     <div class="section">
       ${sectionTitle("Avancé")}
       <div class="card card-flush"><div class="list">
         <div class="list-item" onclick="go('wallet/export')">
           <div class="list-icon">🔐</div>
-          <div class="list-body">
-            <div class="list-title">Exporter la clé privée</div>
-            <div class="list-sub">Pour sauvegarder ou importer ailleurs</div>
-          </div>
+          <div class="list-body"><div class="list-title">Exporter la clé privée</div><div class="list-sub">Pour sauvegarder ou importer ailleurs</div></div>
           <div class="list-chevron">›</div>
         </div>
         <div class="list-item" onclick="window._walletDelete()">
           <div class="list-icon" style="background:rgba(255,69,58,0.15)">🗑</div>
-          <div class="list-body">
-            <div class="list-title" style="color:var(--red)">Supprimer ce wallet</div>
-            <div class="list-sub">Effacer la clé de la base</div>
-          </div>
+          <div class="list-body"><div class="list-title" style="color:var(--red)">Supprimer ce wallet</div><div class="list-sub">Effacer la clé de la base</div></div>
           <div class="list-chevron">›</div>
         </div>
       </div></div>
@@ -763,22 +675,16 @@ route(/^wallet$/, async () => {
 });
 
 window._walletDelete = async function() {
-  const ok = await confirmModal("Supprimer ce wallet ?", "La clé privée sera effacée de notre base. Assurez-vous de l'avoir exportée AVANT si vous souhaitez la conserver.", "Supprimer", "danger");
+  const ok = await confirmModal("Supprimer ce wallet ?", "La clé privée sera effacée. Exportez-la avant si besoin.", "Supprimer", "danger");
   if (!ok) return;
   await api("/wallet", {method:"DELETE"});
-  invalidateAll();
-  toast("Wallet supprimé");
-  await loadUser();
-  go("wallet");
+  invalidateAll(); toast("Wallet supprimé"); await loadUser(); go("wallet");
 };
 
 route(/^wallet\/create$/, async () => {
   render(`
     <div class="page-title">Créer un wallet</div>
-    <div class="alert warning">
-      <h4>⚠ Attention</h4>
-      <p>Un nouveau wallet Polygon va être généré. Sa clé privée sera affichée <b>UNE SEULE FOIS</b> — sauvegardez-la.</p>
-    </div>
+    <div class="alert warning"><h4>⚠ Attention</h4><p>Un nouveau wallet Polygon va être généré. La clé privée sera affichée <b>UNE SEULE FOIS</b>.</p></div>
     <button class="btn btn-primary" id="create-btn">✨ Générer mon wallet</button>
     <button class="btn btn-secondary" style="margin-top:10px" onclick="go('wallet')">Annuler</button>
   `);
@@ -786,14 +692,10 @@ route(/^wallet\/create$/, async () => {
   document.getElementById("create-btn").onclick = async () => {
     try {
       const r = await api("/wallet/create", {method:"POST"});
-      invalidateAll();
-      await loadUser();
+      invalidateAll(); await loadUser();
       render(`
         <div class="page-title">✅ Wallet créé</div>
-        <div class="alert">
-          <h4>⚠ Sauvegardez MAINTENANT</h4>
-          <p>La clé privée ne sera plus affichée après cet écran. Copiez-la dans un gestionnaire de mots de passe ou un endroit sûr.</p>
-        </div>
+        <div class="alert"><h4>⚠ Sauvegardez MAINTENANT</h4><p>La clé ne sera plus affichée après cet écran.</p></div>
         <div class="card">
           <div class="tiny" style="margin-bottom:6px">Adresse</div>
           <div class="addr-box mono" onclick="copy('${r.address}')">${r.address}</div>
@@ -822,13 +724,8 @@ route(/^wallet\/import$/, async () => {
   setMainBtn("IMPORTER", async () => {
     const pk = document.getElementById("pk-input").value.trim();
     if (!pk) return toast("Clé requise", "error");
-    try {
-      const r = await api("/wallet/import", {method:"POST", body:{private_key: pk}});
-      invalidateAll();
-      await loadUser();
-      toast("Wallet importé: " + shortAddr(r.address));
-      go("wallet");
-    } catch (e) { toast(e.message, "error"); }
+    try { const r = await api("/wallet/import", {method:"POST", body:{private_key: pk}}); invalidateAll(); await loadUser(); toast("Wallet importé: " + shortAddr(r.address)); go("wallet"); }
+    catch (e) { toast(e.message, "error"); }
   });
 }, {tab: "wallet", back: "wallet"});
 
@@ -836,17 +733,10 @@ route(/^wallet\/deposit$/, async () => {
   const me = APP.user;
   render(`
     <div class="page-title">Déposer</div>
-
     <div class="alert info">
       <h4>ℹ Instructions</h4>
-      <p>
-        • Réseau : <b>Polygon</b> uniquement (pas Ethereum, pas BSC)<br>
-        • Token : <b>USDC.e</b> (bridge Polygon, pas USDC natif)<br>
-        • Envoyez aussi un peu de <b>MATIC</b> (0.1 suffit) pour payer le gas<br>
-        • Crédité après 1 confirmation (~3 sec)
-      </p>
+      <p>• Réseau : <b>Polygon</b> uniquement<br>• Token : <b>USDC.e</b> (bridge Polygon)<br>• Ajoutez aussi un peu de <b>MATIC</b> (0.1 suffit) pour le gas<br>• Crédité après 1 confirmation (~3 sec)</p>
     </div>
-
     <div class="card">
       <div class="tiny" style="margin-bottom:8px">Votre adresse de dépôt</div>
       <div class="addr-box mono" onclick="copy('${me.wallet_address}')">${me.wallet_address}</div>
@@ -860,12 +750,7 @@ route(/^wallet\/withdraw$/, async () => {
   const bal = await api("/wallet/balance");
   render(`
     <div class="page-title">Retirer</div>
-
-    <div class="hero" style="padding:20px">
-      <div class="hero-value">${fmtUsd(bal.usdc)}</div>
-      <div class="hero-label">Disponible</div>
-    </div>
-
+    <div class="hero" style="padding:20px"><div class="hero-value">${fmtUsd(bal.usdc)}</div><div class="hero-label">Disponible</div></div>
     <div class="card">
       <div class="form-row">
         <label class="label">Adresse destination</label>
@@ -891,8 +776,7 @@ route(/^wallet\/withdraw$/, async () => {
     const ok = await confirmModal("Confirmer le retrait", `Envoyer ${fmtUsd(amt)} USDC à ${shortAddr(to)} ?\n\nLes transactions blockchain sont irréversibles.`, "Envoyer");
     if (!ok) return;
     try {
-      clearMainBtn();
-      toast("Transaction en cours…");
+      clearMainBtn(); toast("Transaction en cours…");
       const r = await api("/wallet/withdraw", {method:"POST", body:{to_address: to, amount: amt}});
       invalidate("wallet");
       render(`
@@ -917,21 +801,15 @@ route(/^wallet\/export$/, async () => {
     <div class="page-title">Exporter la clé privée</div>
     <div class="alert">
       <h4>🔐 Zone dangereuse</h4>
-      <p>Votre clé privée donne un contrôle <b>total</b> du wallet. Quiconque la possède peut vider vos fonds. Ne la partagez jamais, ne la collez pas en ligne.</p>
+      <p>Votre clé privée donne un contrôle <b>total</b> du wallet. Ne la partagez jamais.</p>
     </div>
     <div class="card">
       <label class="toggle-row">
-        <div>
-          <div class="toggle-label">Je comprends les risques</div>
-          <div class="toggle-sub">Cette clé ne doit être vue que par moi</div>
-        </div>
+        <div><div class="toggle-label">Je comprends les risques</div></div>
         <div class="toggle"><input type="checkbox" id="c1"><span class="slider"></span></div>
       </label>
       <label class="toggle-row">
-        <div>
-          <div class="toggle-label">Je ne suis pas en public</div>
-          <div class="toggle-sub">Aucun enregistrement d'écran en cours</div>
-        </div>
+        <div><div class="toggle-label">Je ne suis pas en public</div></div>
         <div class="toggle"><input type="checkbox" id="c2"><span class="slider"></span></div>
       </label>
     </div>
@@ -939,14 +817,12 @@ route(/^wallet\/export$/, async () => {
   `);
   setBack("wallet");
   document.getElementById("exp-btn").onclick = async () => {
-    if (!document.getElementById("c1").checked || !document.getElementById("c2").checked) {
-      return toast("Cochez les deux cases", "error");
-    }
+    if (!document.getElementById("c1").checked || !document.getElementById("c2").checked) return toast("Cochez les deux cases", "error");
     try {
       const r = await api("/wallet/export-pk", {method:"POST", body:{confirm: true}});
       render(`
         <div class="page-title">🔐 Clé privée</div>
-        <div class="alert"><h4>⚠ Copiez maintenant</h4><p>Retournez à l'écran wallet dès que vous l'avez sauvegardée.</p></div>
+        <div class="alert"><h4>⚠ Copiez maintenant</h4><p>Retournez au wallet dès que vous l'avez sauvegardée.</p></div>
         <div class="card">
           <div class="addr-box mono" style="color:var(--red);background:rgba(255,69,58,0.08)">${r.private_key}</div>
           <button class="btn btn-primary" style="margin-top:12px" onclick="copy('${r.private_key}')">📋 Copier la clé</button>
@@ -960,22 +836,35 @@ route(/^wallet\/export$/, async () => {
 
 /* ── MORE / Plus ──────────────────────────────────── */
 route(/^more$/, async () => {
+  const ctrl = await cached("ctrl-status", () => api("/controls/status"), 5000);
+  const me = APP.user;
   render(`
     <div class="page-title">Plus</div>
+
     <div class="card card-flush"><div class="list">
       <div class="list-item" onclick="go('more/settings')">
         <div class="list-icon">⚙️</div>
-        <div class="list-body"><div class="list-title">Réglages</div><div class="list-sub">Sizing, risque, notifications…</div></div>
+        <div class="list-body"><div class="list-title">Réglages</div><div class="list-sub">Sizing, risque, filtres, notifs…</div></div>
         <div class="list-chevron">›</div>
       </div>
       <div class="list-item" onclick="go('more/reports')">
         <div class="list-icon">📈</div>
-        <div class="list-body"><div class="list-title">Rapports</div><div class="list-sub">PnL par période et source</div></div>
+        <div class="list-body"><div class="list-title">Rapports</div><div class="list-sub">PnL par période · Export HTML</div></div>
+        <div class="list-chevron">›</div>
+      </div>
+      <div class="list-item" onclick="go('more/analytics')">
+        <div class="list-icon">🧠</div>
+        <div class="list-body"><div class="list-title">Analytics V3</div><div class="list-sub">Traders · Portfolio · Signaux · Filtres</div></div>
+        <div class="list-chevron">›</div>
+      </div>
+      <div class="list-item" onclick="go('more/controls')">
+        <div class="list-icon">${ctrl.state==='running'?'✅':ctrl.state==='paused'?'⏸':'⏹'}</div>
+        <div class="list-body"><div class="list-title">Contrôles</div><div class="list-sub">${ctrl.state==='running'?'En marche':ctrl.state==='paused'?'En pause':'Arrêté'}</div></div>
         <div class="list-chevron">›</div>
       </div>
       <div class="list-item" onclick="go('more/strategy-wallet')">
         <div class="list-icon">🎯</div>
-        <div class="list-body"><div class="list-title">Wallet stratégie</div><div class="list-sub">Wallet dédié aux stratégies</div></div>
+        <div class="list-body"><div class="list-title">Wallet stratégie</div><div class="list-sub">${me.strategy_wallet_address?'Configuré':'Non configuré'}</div></div>
         <div class="list-chevron">›</div>
       </div>
     </div></div>
@@ -989,21 +878,214 @@ route(/^more$/, async () => {
       </div>
     </div>
 
-    <div class="section" style="text-align:center;padding-top:20px">
-      <div class="small">WENPOLYMARKET · v2</div>
-    </div>
+    <div class="section" style="text-align:center;padding-top:20px"><div class="small">WENPOLYMARKET · v3</div></div>
   `);
 });
 
-/* ── Settings ─────────────────────────────────────── */
+/* ── CONTROLS ─────────────────────────────────────── */
+route(/^more\/controls$/, async () => {
+  const ctrl = await api("/controls/status");
+  const stateColor = ctrl.state === "running" ? "green" : ctrl.state === "paused" ? "orange" : "red";
+  const stateText = ctrl.state === "running" ? "En marche" : ctrl.state === "paused" ? "En pause" : "Arrêté";
+  render(`
+    <div class="page-title">Contrôles</div>
+
+    <div class="card" style="text-align:center;padding:28px 16px">
+      <div style="font-size:52px;margin-bottom:8px">${ctrl.state==='running'?'✅':ctrl.state==='paused'?'⏸':'⏹'}</div>
+      <div class="h2" style="color:var(--${stateColor==='green'?'green':stateColor==='orange'?'orange':'red'})">${stateText}</div>
+      <div class="small" style="margin-top:4px">${ctrl.paper_trading ? 'Mode paper (simulation)' : 'Mode live'}</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Actions</div>
+      ${ctrl.state === 'running' ? `
+        <button class="btn btn-secondary" onclick="window._ctrlPause()">⏸ Mettre en pause</button>
+        <button class="btn btn-danger" style="margin-top:8px" onclick="window._ctrlStop()">⏹ Arrêter</button>
+      ` : ctrl.state === 'paused' ? `
+        <button class="btn btn-primary" onclick="window._ctrlResume()">▶ Reprendre</button>
+        <button class="btn btn-danger" style="margin-top:8px" onclick="window._ctrlStop()">⏹ Arrêter</button>
+      ` : `
+        <button class="btn btn-primary" onclick="window._ctrlResume()">✓ Réactiver</button>
+      `}
+    </div>
+
+    <div class="alert info">
+      <h4>ℹ Différence Pause vs Arrêt</h4>
+      <p><b>Pause</b> : arrêt temporaire, reprend vite.<br><b>Arrêt</b> : désactive complètement, il faut réactiver manuellement.<br>Dans les deux cas, <b>les positions ouvertes restent actives</b> et peuvent être settlées.</p>
+    </div>
+  `);
+  setBack("more");
+}, {tab: "more", back: "more"});
+
+/* ── ANALYTICS ─────────────────────────────────────── */
+route(/^more\/analytics$/, async () => {
+  go("more/analytics/traders");
+}, {tab: "more", back: "more"});
+
+route(/^more\/analytics\/traders$/, async () => {
+  const d = await api("/analytics/traders");
+  const nav = subNav([
+    {label:"Traders", href:"more/analytics/traders"},
+    {label:"Portfolio", href:"more/analytics/portfolio"},
+    {label:"Signaux", href:"more/analytics/signals"},
+    {label:"Filtres", href:"more/analytics/filters"},
+  ], "more/analytics/traders");
+
+  const catBadge = (c) => c === "hot" ? badge("🔥 HOT", "green")
+    : c === "cold" ? badge("❄️ COLD", "red")
+    : c === "warm" ? badge("Actif", "blue")
+    : badge("Nouveau", "muted");
+
+  render(`
+    <div class="page-title">Analytics — Traders</div>
+    ${nav}
+    ${d.traders.length === 0
+      ? emptyState("👥", "Aucun trader suivi", "Ajoutez des traders pour voir leurs analytics.")
+      : `<div class="card card-flush"><div class="list">${d.traders.map(t => `
+          <div class="list-item">
+            <div class="avatar">${t.wallet_short.slice(2,4).toUpperCase()}</div>
+            <div class="list-body">
+              <div class="list-title mono">${t.wallet_short}</div>
+              <div class="list-sub">
+                ${catBadge(t.category)}
+                ${t.current_streak >= 3 ? badge((t.streak_type==='win'?'🔥 '+t.current_streak+'W':'❄️ '+t.current_streak+'L'), t.streak_type==='win'?'green':'red') : ''}
+                <span style="margin-left:4px">${t.total_trades_30d} trades · ${fmtPct(t.win_rate)}</span>
+              </div>
+            </div>
+            <div class="list-right"><span class="${pnlClass(t.pnl_30d)}" style="font-weight:600">${pnlSign(t.pnl_30d)}</span></div>
+          </div>`).join("")}</div></div>`}
+  `);
+  setBack("more");
+}, {tab: "more", back: "more"});
+
+route(/^more\/analytics\/portfolio$/, async () => {
+  const d = await api("/analytics/portfolio");
+  const nav = subNav([
+    {label:"Traders", href:"more/analytics/traders"},
+    {label:"Portfolio", href:"more/analytics/portfolio"},
+    {label:"Signaux", href:"more/analytics/signals"},
+    {label:"Filtres", href:"more/analytics/filters"},
+  ], "more/analytics/portfolio");
+  render(`
+    <div class="page-title">Analytics — Portfolio</div>
+    ${nav}
+    ${hero(fmtUsd(d.total_open_value), "Valeur positions ouvertes")}
+    ${statsGrid([
+      {value: d.open_count, label: "Positions"},
+      {value: d.by_source.length, label: "Sources"},
+    ])}
+    ${d.by_source.length > 0 ? `
+      <div class="section">
+        ${sectionTitle("Répartition par source")}
+        <div class="card">
+          ${d.by_source.slice(0,10).map(s => `
+            <div style="margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                <span class="mono">${s.source.length > 30 ? s.source.slice(0,10)+'…'+s.source.slice(-4) : s.source}</span>
+                <span>${fmtUsd(s.value)} · ${s.pct}%</span>
+              </div>
+              <div class="progress"><div class="progress-fill" style="width:${s.pct}%"></div></div>
+            </div>`).join("")}
+        </div>
+      </div>` : ""}
+    ${d.positions.length > 0 ? `
+      <div class="section">
+        ${sectionTitle("Positions ouvertes (" + d.positions.length + ")")}
+        <div class="card card-flush"><div class="list">${d.positions.map(p => `
+          <div class="list-item">
+            <div class="list-body">
+              <div class="list-title">${esc(p.market_question)}</div>
+              <div class="list-sub">${p.shares.toFixed(2)} @ ${p.price.toFixed(4)} · ${p.age_hours}h</div>
+            </div>
+            <div class="list-right">${fmtUsd(p.amount)}</div>
+          </div>`).join("")}</div></div>
+      </div>` : ""}
+  `);
+  setBack("more");
+}, {tab: "more", back: "more"});
+
+route(/^more\/analytics\/signals$/, async () => {
+  const d = await api("/analytics/signals");
+  const nav = subNav([
+    {label:"Traders", href:"more/analytics/traders"},
+    {label:"Portfolio", href:"more/analytics/portfolio"},
+    {label:"Signaux", href:"more/analytics/signals"},
+    {label:"Filtres", href:"more/analytics/filters"},
+  ], "more/analytics/signals");
+  const maxCount = Math.max(1, ...d.by_day.map(x => x.count));
+  render(`
+    <div class="page-title">Analytics — Signaux</div>
+    ${nav}
+    ${statsGrid([
+      {value: d.total_7d, label: "Trades 7j"},
+      {value: d.avg_per_day, label: "Moyenne / jour"},
+    ])}
+    <div class="section">
+      ${sectionTitle("Activité par jour")}
+      <div class="card">
+        ${d.by_day.length === 0
+          ? `<div class="small" style="text-align:center;padding:20px 0">Aucune activité</div>`
+          : d.by_day.map(x => `
+              <div style="margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                  <span>${x.date}</span><span>${x.count} trades</span>
+                </div>
+                <div class="progress"><div class="progress-fill" style="width:${(x.count/maxCount)*100}%;background:var(--tg-btn)"></div></div>
+              </div>`).join("")}
+      </div>
+    </div>
+  `);
+  setBack("more");
+}, {tab: "more", back: "more"});
+
+route(/^more\/analytics\/filters$/, async () => {
+  const d = await api("/analytics/filters");
+  const nav = subNav([
+    {label:"Traders", href:"more/analytics/traders"},
+    {label:"Portfolio", href:"more/analytics/portfolio"},
+    {label:"Signaux", href:"more/analytics/signals"},
+    {label:"Filtres", href:"more/analytics/filters"},
+  ], "more/analytics/filters");
+  const crit = d.scoring_criteria || {};
+  render(`
+    <div class="page-title">Analytics — Filtres</div>
+    ${nav}
+    ${statsGrid([
+      {value: d.smart_filter_enabled ? "✓" : "✗", label: "Smart filter"},
+      {value: d.signal_scoring_enabled ? "✓" : "✗", label: "Scoring"},
+      {value: d.min_signal_score + "/100", label: "Score min"},
+      {value: d.trades_executed_30d, label: "Trades 30j"},
+    ], 4)}
+    ${Object.keys(crit).length > 0 ? `
+      <div class="section">
+        ${sectionTitle("Poids des critères de scoring")}
+        <div class="card">
+          ${Object.entries(crit).map(([name, c]) => `
+            <div style="margin-bottom:10px">
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                <span>${c.on ? '✓' : '✗'} ${name}</span>
+                <span>${c.w || 0}%</span>
+              </div>
+              <div class="progress"><div class="progress-fill" style="width:${c.w||0}%;background:${c.on?'var(--green)':'var(--tg-hint)'}"></div></div>
+            </div>`).join("")}
+        </div>
+      </div>` : ""}
+    <div class="alert info">
+      <h4>ℹ À propos</h4>
+      <p>Le smart filter combine 6 critères (spread, liquidité, conviction, forme du trader, timing, consensus) pour scorer chaque signal entre 0 et 100. Seuls les signaux ≥ score min sont copiés.</p>
+    </div>
+    <button class="btn btn-primary" onclick="go('more/settings')">Modifier les réglages</button>
+  `);
+  setBack("more");
+}, {tab: "more", back: "more"});
+
+/* ── SETTINGS ─────────────────────────────────────── */
 route(/^more\/settings$/, async () => {
   const s = await api("/settings");
+
   const tgl = (key, label, sub, val) => `
     <label class="toggle-row">
-      <div>
-        <div class="toggle-label">${label}</div>
-        ${sub ? `<div class="toggle-sub">${sub}</div>` : ""}
-      </div>
+      <div><div class="toggle-label">${label}</div>${sub ? `<div class="toggle-sub">${sub}</div>` : ""}</div>
       <div class="toggle"><input type="checkbox" data-key="${key}" ${val?"checked":""}><span class="slider"></span></div>
     </label>`;
   const num = (key, label, val, step=1, min=0, max=1000, hint) => `
@@ -1012,63 +1094,126 @@ route(/^more\/settings$/, async () => {
       <input class="input" type="number" data-key="${key}" value="${val ?? ""}" step="${step}" min="${min}" max="${max}">
       ${hint ? `<div class="input-hint">${hint}</div>` : ""}
     </div>`;
-  const sel = (key, label, val, options) => `
+  const sel = (key, label, val, options, hint) => `
     <div class="form-row">
       <label class="label">${label}</label>
       <select class="input" data-key="${key}">
-        ${options.map(o => `<option value="${o}" ${o===val?"selected":""}>${o}</option>`).join("")}
+        ${options.map(o => {
+          const value = typeof o === 'object' ? o.value : o;
+          const text = typeof o === 'object' ? o.label : o;
+          return `<option value="${value}" ${value===val?"selected":""}>${text}</option>`;
+        }).join("")}
       </select>
+      ${hint ? `<div class="input-hint">${hint}</div>` : ""}
     </div>`;
 
   render(`
     <div class="page-title">Réglages</div>
 
     <div class="card">
-      <div class="card-title">Mode</div>
+      <div class="card-title">🔌 État du bot</div>
       ${tgl("paper_trading", "Paper trading", "Trades fictifs, pas d'USDC réel", s.paper_trading)}
-      ${tgl("is_paused", "Pause copy trading", "Stoppe la copie automatique", s.is_paused)}
-      ${tgl("strategy_is_paused", "Pause stratégies", "Stoppe l'exécution des signaux", s.strategy_is_paused)}
+      ${tgl("is_paused", "En pause", "Stoppe temporairement la copie", s.is_paused)}
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="go('more/controls')">Contrôles détaillés ›</button>
     </div>
 
     <div class="card">
-      <div class="card-title">Taille des trades</div>
-      ${sel("sizing_mode", "Mode", s.sizing_mode || "FIXED", ["FIXED","PROPORTIONAL","SMART"])}
-      ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000, "Si mode FIXED")}
-      ${num("proportional_pct", "% du master", s.proportional_pct, 0.5, 0.1, 100, "Si mode PROPORTIONAL")}
+      <div class="card-title">💰 Capital & taille des trades</div>
+      ${num("allocated_capital", "Capital alloué USDC", s.allocated_capital, 10, 10, 100000, "Capital total dédié au copy")}
+      ${sel("sizing_mode", "Mode de sizing", s.sizing_mode || "fixed",
+        [{value:"fixed", label:"🟰 Fixe — même montant à chaque trade"},
+         {value:"percent", label:"% — pourcentage du capital"},
+         {value:"proportional", label:"📏 Proportionnel au master"},
+         {value:"kelly", label:"🧠 Kelly (avancé)"}])}
+      ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000, "Si mode FIXE")}
+      ${num("percent_per_trade", "% par trade", s.percent_per_trade, 0.5, 0.1, 100, "Si mode PERCENT")}
+      ${num("multiplier", "Multiplicateur", s.multiplier, 0.1, 0.1, 10, "Multiplie la taille (0.5 = 50%, 2 = 2x)")}
       ${num("min_trade_usdc", "Min USDC", s.min_trade_usdc, 0.5, 0, 1000)}
       ${num("max_trade_usdc", "Max USDC", s.max_trade_usdc, 0.5, 0, 10000)}
-      ${num("daily_limit_usdc", "Limite quotidienne USDC", s.daily_limit_usdc, 1, 0, 100000, "Cap journalier total")}
+      ${num("daily_limit_usdc", "Limite quotidienne USDC", s.daily_limit_usdc, 1, 0, 100000, "Total max dépensé par jour")}
     </div>
 
     <div class="card">
-      <div class="card-title">Stop Loss / Take Profit</div>
+      <div class="card-title">⛽ Vitesse des transactions</div>
+      ${sel("gas_mode", "Mode gas (priority fee)", s.gas_mode || "fast",
+        [{value:"normal", label:"🐢 Normal — 30 gwei, ~2s"},
+         {value:"fast", label:"🚀 Fast — 50 gwei, ~1.5s"},
+         {value:"ultra", label:"⚡ Ultra — 100 gwei, <1s"},
+         {value:"instant", label:"💎 Instant — 200 gwei, max speed"}],
+        "Plus c'est rapide, plus le MATIC consommé augmente")}
+    </div>
+
+    <div class="card">
+      <div class="card-title">🛡 Stop Loss & Take Profit</div>
       ${tgl("stop_loss_enabled", "Stop Loss actif", null, s.stop_loss_enabled)}
-      ${num("stop_loss_pct", "Stop Loss %", s.stop_loss_pct, 1, 1, 100)}
+      ${num("stop_loss_pct", "Stop Loss %", s.stop_loss_pct, 1, 1, 100, "Vend si la perte dépasse ce %")}
       ${tgl("take_profit_enabled", "Take Profit actif", null, s.take_profit_enabled)}
-      ${num("take_profit_pct", "Take Profit %", s.take_profit_pct, 1, 1, 500)}
-      ${tgl("trailing_stop_enabled", "Trailing stop", "SL qui suit le prix", s.trailing_stop_enabled)}
+      ${num("take_profit_pct", "Take Profit %", s.take_profit_pct, 1, 1, 500, "Vend si le gain dépasse ce %")}
+      ${tgl("trailing_stop_enabled", "Trailing stop", "SL qui suit le prix quand ça monte", s.trailing_stop_enabled)}
       ${num("trailing_stop_pct", "Trailing %", s.trailing_stop_pct, 1, 1, 100)}
     </div>
 
     <div class="card">
-      <div class="card-title">Smart filter</div>
-      ${tgl("smart_filter_enabled", "Filtre intelligent", "Scoring auto des signaux", s.smart_filter_enabled)}
-      ${num("min_signal_score", "Score min", s.min_signal_score, 0.05, 0, 1, "Entre 0 et 1")}
-      ${num("min_volume_24h", "Volume 24h min USDC", s.min_volume_24h, 100, 0, 1000000)}
-      ${num("min_liquidity", "Liquidité min USDC", s.min_liquidity, 100, 0, 1000000)}
-      ${num("max_spread_pct", "Spread max %", s.max_spread_pct, 0.5, 0, 50)}
+      <div class="card-title">⏱ Sortie automatique</div>
+      ${tgl("time_exit_enabled", "Time exit", "Clôture après X heures", s.time_exit_enabled)}
+      ${num("time_exit_hours", "Heures avant exit", s.time_exit_hours, 1, 1, 720, "1 à 720 h (30 jours max)")}
+      ${tgl("scale_out_enabled", "Scale out", "Prise de profit partielle au TP1", s.scale_out_enabled)}
+      ${num("scale_out_pct", "% à prendre au TP1", s.scale_out_pct, 5, 5, 95)}
     </div>
 
     <div class="card">
-      <div class="card-title">Notifications</div>
+      <div class="card-title">⏳ Délai & confirmation</div>
+      ${num("copy_delay_seconds", "Délai avant copie (sec)", s.copy_delay_seconds, 1, 0, 600, "Attendre X sec avant d'exécuter")}
+      ${tgl("manual_confirmation", "Confirmation manuelle", "Demander avant gros trades", s.manual_confirmation)}
+      ${num("confirmation_threshold_usdc", "Seuil USDC", s.confirmation_threshold_usdc, 1, 0, 10000, "Confirme si ≥ ce montant")}
+    </div>
+
+    <div class="card">
+      <div class="card-title">📊 Contrôles de portefeuille</div>
+      ${num("max_positions", "Max positions ouvertes", s.max_positions, 1, 1, 100)}
+      ${num("max_category_exposure_pct", "Max exposition / catégorie %", s.max_category_exposure_pct, 5, 5, 100, "Ex. max 30% sur Crypto")}
+      ${num("max_direction_bias_pct", "Max biais directionnel %", s.max_direction_bias_pct, 5, 50, 100, "Équilibre YES/NO")}
+    </div>
+
+    <div class="card">
+      <div class="card-title">🔥 Suivi des traders</div>
+      ${tgl("auto_pause_cold_traders", "Pause auto traders COLD", "Met en pause si win rate bas", s.auto_pause_cold_traders)}
+      ${num("cold_trader_threshold", "Seuil win rate cold %", s.cold_trader_threshold, 1, 0, 100)}
+      ${num("hot_streak_boost", "Boost hot streak", s.hot_streak_boost, 0.1, 1, 5, "Multiplicateur sizing si streak chaud")}
+    </div>
+
+    <div class="card">
+      <div class="card-title">🧠 Smart filter & scoring</div>
+      ${tgl("signal_scoring_enabled", "Scoring activé", "Filtre les signaux faibles", s.signal_scoring_enabled)}
+      ${num("min_signal_score", "Score minimum (0-100)", s.min_signal_score, 5, 0, 100)}
+      ${tgl("smart_filter_enabled", "Smart filter", "Filtres avancés par type", s.smart_filter_enabled)}
+      ${tgl("skip_coin_flip", "Ignorer les 50/50", "Skip si pas de conviction", s.skip_coin_flip)}
+      ${num("min_conviction_pct", "Conviction minimum %", s.min_conviction_pct, 0.5, 0, 100)}
+      ${num("max_price_drift_pct", "Drift prix max %", s.max_price_drift_pct, 0.5, 0, 50, "Rejette si prix a trop bougé")}
+      ${num("min_trader_winrate_for_type", "Win rate min trader %", s.min_trader_winrate_for_type, 5, 0, 100)}
+      ${num("min_trader_trades_for_type", "Min trades trader", s.min_trader_trades_for_type, 1, 1, 1000)}
+      <div class="section-title" style="margin-top:16px"><h2>Profils rapides</h2></div>
+      <div class="btn-row cols-3">
+        <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('prudent')">🛡 Prudent</button>
+        <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('balanced')">⚖️ Équilibré</button>
+        <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('aggressive')">⚡ Agressif</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🔔 Notifications</div>
+      ${sel("notification_mode", "Mode", s.notification_mode || "dm",
+        [{value:"dm", label:"📱 Direct — DM privé"},
+         {value:"group", label:"👥 Groupe — topic dédié"},
+         {value:"both", label:"📨 Les deux"}])}
       ${tgl("notify_on_buy", "Sur achats", null, s.notify_on_buy)}
       ${tgl("notify_on_sell", "Sur ventes", null, s.notify_on_sell)}
       ${tgl("notify_on_sl_tp", "SL / TP déclenchés", null, s.notify_on_sl_tp)}
     </div>
 
     <div class="card">
-      <div class="card-title">Stratégies</div>
-      ${num("strategy_trade_fee_rate", "Fee rate", s.strategy_trade_fee_rate, 0.01, 0.01, 0.20, "Entre 0.01 (1%) et 0.20 (20%)")}
+      <div class="card-title">🎯 Stratégies</div>
+      ${num("strategy_trade_fee_rate", "Fee rate", s.strategy_trade_fee_rate, 0.01, 0.01, 0.20, "Entre 1% et 20%")}
       ${num("strategy_max_trades_per_day", "Trades max/jour", s.strategy_max_trades_per_day, 1, 1, 200)}
     </div>
 
@@ -1085,10 +1230,8 @@ route(/^more\/settings$/, async () => {
       else if (el.type === "number") val = el.value === "" ? null : parseFloat(el.value);
       else val = el.value;
       if (val === null) return;
-      try {
-        await api("/settings", {method:"POST", body:{[key]: val}});
-        toast("✓ Sauvegardé");
-      } catch (e) { toast(e.message, "error"); }
+      try { await api("/settings", {method:"POST", body:{[key]: val}}); toast("✓ Sauvegardé"); }
+      catch (e) { toast(e.message, "error"); }
     };
     if (el.type === "checkbox" || el.tagName === "SELECT") {
       el.addEventListener("change", send);
@@ -1101,7 +1244,18 @@ route(/^more\/settings$/, async () => {
   });
 }, {tab: "more", back: "more"});
 
-/* ── Reports ──────────────────────────────────────── */
+window._applyProfile = async function(profile) {
+  const names = {prudent: "Prudent", balanced: "Équilibré", aggressive: "Agressif"};
+  const ok = await confirmModal("Appliquer profil " + names[profile] + " ?", "Remplace tes paramètres de scoring par le preset correspondant.", "Appliquer");
+  if (!ok) return;
+  try {
+    await api("/settings/scoring-profile", {method:"POST", body:{profile}});
+    toast("Profil appliqué ✓");
+    dispatch();
+  } catch (e) { toast(e.message, "error"); }
+};
+
+/* ── REPORTS ──────────────────────────────────────── */
 route(/^more\/reports$/, async () => {
   const [day, week, month, byTrader, byMarket] = await Promise.all([
     api("/reports/pnl?period=day"),
@@ -1111,11 +1265,14 @@ route(/^more\/reports$/, async () => {
     api("/reports/by-market"),
   ]);
 
-  const pnlCard = (title, r) => `
+  const pnlCard = (title, r, period) => `
     <div class="card">
       <div class="card-header">
         <div class="h3">${title}</div>
-        <span class="${pnlClass(r.pnl)}" style="font-weight:700;font-size:18px">${pnlSign(r.pnl)}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="${pnlClass(r.pnl)}" style="font-weight:700;font-size:18px">${pnlSign(r.pnl)}</span>
+          <button class="btn btn-ghost btn-icon" onclick="window._exportReport('${period}')" title="Exporter">⬇</button>
+        </div>
       </div>
       <div class="stats-inline">
         <div class="stat-mini"><div class="stat-value">${r.trades}</div><div class="stat-label">Trades</div></div>
@@ -1126,12 +1283,22 @@ route(/^more\/reports$/, async () => {
 
   render(`
     <div class="page-title">Rapports</div>
-    ${pnlCard("Aujourd'hui", day)}
-    ${pnlCard("7 derniers jours", week)}
-    ${pnlCard("30 derniers jours", month)}
+    ${pnlCard("Aujourd'hui", day, "day")}
+    ${pnlCard("7 derniers jours", week, "week")}
+    ${pnlCard("30 derniers jours", month, "month")}
+
+    <div class="card">
+      <div class="card-title">📄 Exporter un rapport complet</div>
+      <div class="small" style="margin-bottom:12px">Rapport HTML détaillé imprimable (Ctrl+P → Sauvegarder en PDF)</div>
+      <div class="btn-row cols-3">
+        <button class="btn btn-secondary btn-sm" onclick="window._exportReport('day')">📅 Jour</button>
+        <button class="btn btn-primary btn-sm" onclick="window._exportReport('week')">📅 7j</button>
+        <button class="btn btn-secondary btn-sm" onclick="window._exportReport('month')">📅 30j</button>
+      </div>
+    </div>
 
     <div class="section">
-      ${sectionTitle("Par trader", byTrader.traders.length ? null : null)}
+      ${sectionTitle("Par trader")}
       ${byTrader.traders.length === 0
         ? `<div class="card small" style="text-align:center;padding:24px">Aucune donnée</div>`
         : `<div class="card card-flush"><div class="list">${byTrader.traders.slice(0,10).map(t => `
@@ -1163,27 +1330,40 @@ route(/^more\/reports$/, async () => {
   setBack("more");
 }, {tab: "more", back: "more"});
 
-/* ── Strategy wallet ──────────────────────────────── */
+window._exportReport = function(period) {
+  // Use Telegram's openLink to open in system browser (can't auth there though)
+  // Better: fetch with auth and open data URL
+  fetch("/miniapp/api/reports/export.html?period=" + period, {
+    headers: {"Authorization": "tma " + APP.initData},
+  }).then(r => r.text()).then(html => {
+    const blob = new Blob([html], {type: "text/html"});
+    const url = URL.createObjectURL(blob);
+    if (tg?.openLink) tg.openLink(url);
+    else window.open(url, "_blank");
+    toast("Rapport ouvert ↗");
+  }).catch(e => toast("Erreur export: " + e.message, "error"));
+};
+
+/* ── STRATEGY WALLET ──────────────────────────────── */
 route(/^more\/strategy-wallet$/, async () => {
   const me = APP.user;
   if (!me.strategy_wallet_address) {
     render(`
       <div class="page-title">Wallet stratégie</div>
-      ${emptyState("🎯", "Aucun wallet configuré", "Les stratégies utilisent un wallet dédié, séparé de votre wallet de copy trading.")}
+      ${emptyState("🎯", "Aucun wallet configuré", "Wallet dédié aux stratégies, séparé du copy trading.")}
       <button class="btn btn-primary" id="sw-create">✨ Créer un wallet dédié</button>
-      <button class="btn btn-secondary" style="margin-top:10px" id="sw-import">📥 Importer une clé</button>
+      <button class="btn btn-secondary" style="margin-top:10px" onclick="go('more/strategy-wallet/import')">📥 Importer une clé</button>
     `);
     setBack("more");
     document.getElementById("sw-create").onclick = async () => {
-      const ok = await confirmModal("Créer un wallet stratégie ?", "Un nouveau wallet Polygon sera généré. La clé sera affichée UNE SEULE FOIS.", "Créer");
+      const ok = await confirmModal("Créer un wallet stratégie ?", "La clé sera affichée UNE SEULE FOIS.", "Créer");
       if (!ok) return;
       try {
         const r = await api("/strategy-wallet/create", {method:"POST"});
-        invalidateAll();
-        await loadUser();
+        invalidateAll(); await loadUser();
         render(`
           <div class="page-title">✅ Wallet stratégie créé</div>
-          <div class="alert"><h4>⚠ Sauvegardez MAINTENANT</h4><p>La clé ne sera plus affichée.</p></div>
+          <div class="alert"><h4>⚠ Sauvegardez MAINTENANT</h4></div>
           <div class="card">
             <div class="tiny" style="margin-bottom:6px">Adresse</div>
             <div class="addr-box mono" onclick="copy('${r.address}')">${r.address}</div>
@@ -1196,33 +1376,8 @@ route(/^more\/strategy-wallet$/, async () => {
         setBack("more");
       } catch (e) { toast(e.message, "error"); }
     };
-    document.getElementById("sw-import").onclick = async () => {
-      const { el, close } = await sheet(`
-        <h3>Importer une clé</h3>
-        <div class="sheet-sub">Collez la clé privée du wallet à utiliser pour les stratégies.</div>
-        <div class="form-row">
-          <label class="label">Clé privée</label>
-          <textarea class="input input-mono" id="sw-pk" rows="3" placeholder="0x..."></textarea>
-        </div>
-        <button class="btn btn-primary" id="sw-ok">Importer</button>
-      `);
-      el.querySelector("#sw-ok").onclick = async () => {
-        const pk = el.querySelector("#sw-pk").value.trim();
-        if (!pk) return toast("Clé requise", "error");
-        try {
-          await api("/strategy-wallet/import", {method:"POST", body:{private_key: pk}});
-          invalidateAll();
-          await loadUser();
-          close();
-          el.parentElement?.remove();
-          toast("Importé");
-          go("more/strategy-wallet");
-        } catch (e) { toast(e.message, "error"); }
-      };
-    };
     return;
   }
-
   const bal = await api("/strategy-wallet/balance").catch(() => ({usdc:0, matic:0, address:me.strategy_wallet_address}));
   render(`
     <div class="page-title">Wallet stratégie</div>
@@ -1239,15 +1394,34 @@ route(/^more\/strategy-wallet$/, async () => {
   `);
   setBack("more");
   document.getElementById("sw-del").onclick = async () => {
-    const ok = await confirmModal("Supprimer le wallet stratégie ?", "La clé sera effacée. Exportez-la avant si besoin.", "Supprimer", "danger");
+    const ok = await confirmModal("Supprimer le wallet stratégie ?", "La clé sera effacée.", "Supprimer", "danger");
     if (!ok) return;
     await api("/strategy-wallet", {method:"DELETE"});
-    invalidateAll();
-    await loadUser();
-    toast("Supprimé");
-    go("more");
+    invalidateAll(); await loadUser(); toast("Supprimé"); go("more");
   };
 }, {tab: "more", back: "more"});
+
+route(/^more\/strategy-wallet\/import$/, async () => {
+  render(`
+    <div class="page-title">Importer clé stratégie</div>
+    <div class="card">
+      <div class="form-row">
+        <label class="label">Clé privée</label>
+        <textarea class="input input-mono" id="sw-pk" rows="3" placeholder="0x..."></textarea>
+      </div>
+    </div>
+  `);
+  setBack("more/strategy-wallet");
+  setMainBtn("IMPORTER", async () => {
+    const pk = document.getElementById("sw-pk").value.trim();
+    if (!pk) return toast("Clé requise", "error");
+    try {
+      await api("/strategy-wallet/import", {method:"POST", body:{private_key: pk}});
+      invalidateAll(); await loadUser();
+      toast("Importé"); go("more/strategy-wallet");
+    } catch (e) { toast(e.message, "error"); }
+  });
+}, {tab: "more", back: "more/strategy-wallet"});
 
 /* ═══════════════════════════════════════════════════
    BOOTSTRAP
@@ -1296,7 +1470,6 @@ async function init() {
   catch (e) { showError("Impossible de charger le profil: " + e.message); return; }
 
   window.addEventListener("hashchange", dispatch);
-  // Always dispatch — dispatch itself handles Telegram framework hashes + unknown routes
   dispatch();
 }
 

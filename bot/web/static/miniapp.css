@@ -190,12 +190,16 @@ body {
 .card-flush { padding: 0; overflow: hidden; }
 
 .card-title {
-  font-size: 11px;
-  color: var(--tg-hint);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-weight: 600;
-  margin-bottom: 10px;
+  font-size: 14px;
+  color: var(--tg-text);
+  font-weight: 700;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  letter-spacing: 0.2px;
+}
+@media (prefers-color-scheme: light) {
+  .card-title { border-bottom-color: rgba(0,0,0,0.08); }
 }
 
 .card-header {
