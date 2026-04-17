@@ -227,7 +227,7 @@ async def get_copy_traders(user: User = Depends(get_current_user)):
 @router.get("/copy/stats")
 async def get_copy_stats(user: User = Depends(get_current_user)):
     """Copy trading performance summary."""
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     async with async_session() as session:
