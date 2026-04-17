@@ -199,8 +199,15 @@ const routes = [];
 function route(pattern, handler, opts={}) { routes.push({pattern, handler, opts}); }
 function go(hash) { location.hash = hash; }
 
+const KNOWN_TABS = ["home", "copy", "strategies", "wallet", "more"];
+
 async function dispatch() {
-  const hash = location.hash.slice(1) || "home";
+  let hash = location.hash.slice(1);
+  // Ignore Telegram framework hash params (tgWebAppData=..., tgWebAppVersion=..., etc.)
+  if (!hash || /tgwebapp/i.test(hash) || !KNOWN_TABS.includes(hash.split("/")[0])) {
+    hash = "home";
+    history.replaceState(null, "", "#home");
+  }
   const topTab = hash.split("/")[0];
   for (const r of routes) {
     const m = hash.match(r.pattern);
@@ -218,7 +225,9 @@ async function dispatch() {
       return;
     }
   }
-  render(emptyState("🔍", "Page introuvable", "Cette adresse n'existe pas.", {label:"Retour accueil", onclick:"go('home')"}));
+  // No route matched a valid tab -> fall back to home
+  history.replaceState(null, "", "#home");
+  location.hash = "home";
 }
 
 function showError(msg) {
@@ -1287,8 +1296,8 @@ async function init() {
   catch (e) { showError("Impossible de charger le profil: " + e.message); return; }
 
   window.addEventListener("hashchange", dispatch);
-  if (!location.hash) location.hash = "home";
-  else dispatch();
+  // Always dispatch — dispatch itself handles Telegram framework hashes + unknown routes
+  dispatch();
 }
 
 window.go = go;
