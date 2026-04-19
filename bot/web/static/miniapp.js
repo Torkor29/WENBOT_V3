@@ -785,14 +785,13 @@ route(/^copy\/traders$/, async () => {
   `);
 }, {tab: "copy"});
 
-/* Découvrir sous Copy */
-route(/^copy\/discover$/, async () => { go("copy/discover/month"); }, {tab: "copy"});
-
-route(/^copy\/discover\/(day|week|month|all)$/, async (m) => {
-  const period = m[1];
-  const periodLabel = {day:"24h", week:"7 jours", month:"30 jours", all:"All-time"}[period];
+/* Découvrir sous Copy — leaderboard global Polymarket
+   NOTE: l'API Polymarket /profit ne supporte PAS le filtrage par période actuellement
+   (param 'period' ignoré, retourne toujours all-time). On affiche un seul classement.
+   Les sous-onglets period sont retirés pour ne pas tromper l'utilisateur. */
+route(/^copy\/discover$/, async () => {
   const [d, traders, positions] = await Promise.all([
-    cached("discover-" + period, () => api("/discover/top-traders?period=" + period), 60000),
+    cached("discover-all", () => api("/discover/top-traders?period=all"), 120000),
     cached("copy-traders", () => api("/copy/traders"), 10000),
     cached("copy-positions", () => api("/copy/positions")),
   ]);
@@ -805,14 +804,9 @@ route(/^copy\/discover\/(day|week|month|all)$/, async (m) => {
     ${copyNav("copy/discover", {traders: traders?.count || 0, positions: positions?.count || 0})}
 
     <div class="card" style="margin-bottom:12px">
-      <div class="card-title">📈 Top traders Polymarket — ${periodLabel}</div>
-      <div class="small" style="margin-bottom:10px">Classement par profit net. Tap un trader pour voir ses positions actuelles, ou "+ Suivre" pour copier ses prochains trades.</div>
-      ${subNav([
-        {label:"24h", href:"copy/discover/day"},
-        {label:"7j", href:"copy/discover/week"},
-        {label:"30j", href:"copy/discover/month"},
-        {label:"All", href:"copy/discover/all"},
-      ], "copy/discover/" + period)}
+      <div class="card-title">🏆 Classement Polymarket</div>
+      <div class="small">Top traders par profit cumulé sur Polymarket. Tap un trader pour voir ses positions actuelles, ou "+ Suivre" pour copier ses prochains trades.</div>
+      <button class="btn btn-ghost btn-sm" onclick="invalidate('discover-');dispatch()" style="margin-top:8px">⟳ Actualiser</button>
     </div>
 
     ${hasError ? `
@@ -852,9 +846,17 @@ route(/^copy\/discover\/(day|week|month|all)$/, async (m) => {
       }).join("")}</div></div>
     ` : ""}
 
-    ${!hasError && !hasResults ? emptyState("🔍", "Aucun trader trouvé", "Aucun résultat pour la période " + periodLabel + ".") : ""}
+    ${!hasError && !hasResults ? emptyState("🔍", "Aucun trader trouvé", "Aucun résultat pour le moment.") : ""}
+
+    <div class="alert info" style="margin-top:14px">
+      <h4>ℹ Comment fonctionne le classement</h4>
+      <p>Polymarket fournit le top global par profit cumulé. Le filtrage par période (24h/7j/30j) n'est pas exposé par leur API publique. Tap sur un trader pour analyser ses positions actuelles avant de le suivre.</p>
+    </div>
   `);
 }, {tab: "copy"});
+
+/* Backwards compat: anciennes URLs avec period redirect vers la nouvelle */
+route(/^copy\/discover\/(day|week|month|all)$/, async () => { go("copy/discover"); }, {tab: "copy"});
 
 window._follow = async function(wallet, ev) {
   if (ev) ev.stopPropagation();
