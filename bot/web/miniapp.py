@@ -1548,16 +1548,16 @@ async def discover_top_traders(
     # https://lb-api.polymarket.com/profit
     traders: list[dict] = []
     err: Optional[str] = None
-    # Polymarket API expects capitalized window values
-    window_map = {"day": "Day", "week": "Week", "month": "Month", "all": "All-Time"}
-    window = window_map.get(period, "Month")
+    # Polymarket leaderboard API expects 'period' (capitalized) — verified 2026-04
+    # period=Day|Week|Month|All-Time
+    period_map = {"day": "Day", "week": "Week", "month": "Month", "all": "All-Time"}
+    polymarket_period = period_map.get(period, "Month")
 
-    # Try multiple URL/format combinations as Polymarket API has evolved
+    # Two endpoints: /profit (PnL ranking) and /volume (volume ranking)
+    # We use /profit by default
     candidates = [
-        ("https://lb-api.polymarket.com/profit", {"window": window, "limit": min(limit, 50)}),
-        ("https://lb-api.polymarket.com/profit", {"window": window.lower(), "limit": min(limit, 50)}),
-        ("https://lb-api.polymarket.com/volume", {"window": window, "limit": min(limit, 50)}),
-        ("https://data-api.polymarket.com/leaderboard", {"window": window.lower(), "limit": min(limit, 50)}),
+        ("https://lb-api.polymarket.com/profit", {"period": polymarket_period, "limit": min(limit, 50)}),
+        ("https://lb-api.polymarket.com/volume", {"period": polymarket_period, "limit": min(limit, 50)}),
     ]
 
     last_status = None
@@ -1569,13 +1569,10 @@ async def discover_top_traders(
                 if r.status_code != 200:
                     continue
                 data = r.json()
-                items = []
-                if isinstance(data, list):
-                    items = data
-                elif isinstance(data, dict):
-                    for key in ("users", "data", "items", "leaderboard", "results"):
-                        if key in data and isinstance(data[key], list):
-                            items = data[key]; break
+                items = data if isinstance(data, list) else (
+                    next((data[k] for k in ("users","data","items","leaderboard","results")
+                          if k in data and isinstance(data[k], list)), [])
+                )
                 for t in items[:limit]:
                     if not isinstance(t, dict):
                         continue
@@ -1586,11 +1583,13 @@ async def discover_top_traders(
                     traders.append({
                         "wallet": addr,
                         "wallet_short": f"{addr[:6]}...{addr[-4:]}",
-                        "username": t.get("name") or t.get("username") or t.get("displayName") or t.get("pseudonym") or "",
+                        # Polymarket API renvoie 'pseudonym' et 'name'
+                        "username": t.get("pseudonym") or t.get("name") or t.get("username") or t.get("displayName") or "",
+                        # 'amount' est la valeur principale sur /profit (= PnL en USDC)
                         "pnl": round(float(t.get("amount") or t.get("profit") or t.get("pnl") or t.get("pnlUsd") or 0), 2),
                         "volume": round(float(t.get("volume") or t.get("volumeUsd") or 0), 2),
                         "trades_count": int(t.get("trades") or t.get("numTrades") or t.get("tradesCount") or 0),
-                        "profile_image": t.get("profileImage") or t.get("avatar") or "",
+                        "profile_image": t.get("profileImageOptimized") or t.get("profileImage") or t.get("avatar") or "",
                     })
                 if traders:
                     break  # success
