@@ -844,30 +844,77 @@ route(/^copy\/discover\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
   setBack("copy/discover/month");
 }, {tab: "copy", back: "copy/discover/month"});
 
+let _positionsTimer = null;
+function _stopPositionsAutoRefresh() {
+  if (_positionsTimer) { clearInterval(_positionsTimer); _positionsTimer = null; }
+}
+
 route(/^copy\/positions$/, async () => {
-  const [{positions, count}, traders] = await Promise.all([
-    cached("copy-positions", () => api("/copy/positions")),
-    cached("copy-traders", () => api("/copy/traders")),
-  ]);
+  _stopPositionsAutoRefresh();
+  const traders = await cached("copy-traders", () => api("/copy/traders"));
   render(`
     <div class="page-title">Copy Trading</div>
-    ${copyNav("copy/positions", {traders: traders.count, positions: count})}
-    ${count === 0
-      ? emptyState("📭", "Aucune position ouverte", "Les positions apparaîtront ici dès qu'un trade sera copié.")
-      : `<div class="card card-flush"><div class="list">${positions.map(p => `
-          <div class="list-item">
-            <div class="list-icon">💼</div>
-            <div class="list-body">
-              <div class="list-title">${esc(p.market_question)}</div>
-              <div class="list-sub">${p.shares.toFixed(2)} @ ${p.price.toFixed(4)} · ${p.master_wallet}</div>
-            </div>
-            <div class="list-right">
-              <div style="font-weight:600">${fmtUsd(p.amount)}</div>
-              ${p.is_paper ? badge("PAPER", "orange") : ""}
-            </div>
-          </div>`).join("")}</div></div>`}
+    ${copyNav("copy/positions", {traders: traders?.count || 0})}
+    <div id="positions-content"><div class="loading"><div class="spinner"></div>Chargement…</div></div>
   `);
+  await window._loadPositions();
+  // Auto-refresh every 15s tant qu'on est sur la page
+  _positionsTimer = setInterval(() => {
+    if (document.visibilityState === "visible" && location.hash.startsWith("#copy/positions")) {
+      window._loadPositions();
+    }
+  }, 15000);
 }, {tab: "copy"});
+
+window._loadPositions = async function() {
+  const el = document.getElementById("positions-content");
+  if (!el) { _stopPositionsAutoRefresh(); return; }
+  try {
+    invalidate("copy-positions"); // bust cache for refresh
+    const r = await api("/copy/positions");
+    const liveCount = r.positions.filter(p => p.live).length;
+    if (r.count === 0) {
+      el.innerHTML = emptyState("📭", "Aucune position ouverte", "Les positions apparaîtront ici dès qu'un trade sera copié.");
+      return;
+    }
+    el.innerHTML = `
+      <div class="hero">
+        <div class="hero-value ${pnlClass(r.total_unrealized_pnl)}">${pnlSign(r.total_unrealized_pnl)}</div>
+        <div class="hero-label">PnL non-réalisé · ${r.count} positions</div>
+      </div>
+      ${statsGrid([
+        {value: fmtUsd(r.total_invested), label: "Investi"},
+        {value: fmtUsd(r.total_current_value), label: "Valeur actuelle"},
+      ])}
+      <div class="small" style="text-align:center;margin:8px 0">
+        🔄 Actualisé toutes les 15s · ${liveCount}/${r.count} en suivi live
+        <button class="btn btn-ghost btn-sm" onclick="window._loadPositions()" style="margin-left:8px;padding:2px 8px">⟳</button>
+      </div>
+
+      <div class="card card-flush"><div class="list">${r.positions.map(p => `
+        <div class="list-item">
+          <div class="list-icon">${p.unrealized_pnl > 0 ? '🟢' : p.unrealized_pnl < 0 ? '🔴' : '⚪'}</div>
+          <div class="list-body">
+            <div class="list-title">${esc(p.market_question)}</div>
+            <div class="list-sub">${p.shares.toFixed(2)} sh · entry ${p.entry_price.toFixed(4)} → ${p.current_price.toFixed(4)} ${p.live?'🟢':''}</div>
+            <div class="list-sub">${p.master_wallet}${p.is_paper ? ' · ' + badge("PAPER","orange") : ''}</div>
+          </div>
+          <div class="list-right">
+            <div class="${pnlClass(p.unrealized_pnl)}" style="font-weight:700;font-size:15px">${pnlSign(p.unrealized_pnl)}</div>
+            <div class="small ${pnlClass(p.unrealized_pnl)}">${p.unrealized_pct >= 0 ? '+' : ''}${p.unrealized_pct.toFixed(1)}%</div>
+            <div class="small" style="margin-top:2px">${fmtUsd(p.current_value)}</div>
+          </div>
+        </div>`).join("")}</div></div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="alert"><p>Erreur: ${esc(e.message)}</p></div>`;
+  }
+};
+
+// Stop refresh quand on quitte la page
+window.addEventListener("hashchange", () => {
+  if (!location.hash.startsWith("#copy/positions")) _stopPositionsAutoRefresh();
+});
 
 route(/^copy\/history$/, async () => {
   const {trades} = await api("/copy/trades?limit=50");

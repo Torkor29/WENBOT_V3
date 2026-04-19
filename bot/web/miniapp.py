@@ -416,25 +416,65 @@ async def get_copy_stats(user: User = Depends(get_current_user)):
 
 @router.get("/copy/positions")
 async def get_copy_positions(user: User = Depends(get_current_user)):
+    """Open positions with LIVE current price + unrealized PnL.
+
+    Joins Trade (entry data) with ActivePosition (current price tracked by
+    position_manager every 15s).
+    """
+    from bot.models.active_position import ActivePosition
+
     async with async_session() as session:
-        result = await session.execute(select(Trade).where(
+        # Open BUY trades
+        trade_rows = (await session.execute(select(Trade).where(
             Trade.user_id == user.id, Trade.strategy_id.is_(None),
             Trade.side == TradeSide.BUY, Trade.status == TradeStatus.FILLED,
-            Trade.is_settled == False).order_by(Trade.created_at.desc()).limit(50))
-        trades = result.scalars().all()
-    return {
-        "positions": [{
+            Trade.is_settled == False).order_by(Trade.created_at.desc()).limit(50))).scalars().all()
+
+        # Active positions (live current_price)
+        ap_rows = (await session.execute(select(ActivePosition).where(
+            ActivePosition.user_id == user.id,
+            ActivePosition.is_closed == False,  # noqa: E712
+        ))).scalars().all()
+        ap_by_token = {p.token_id: p for p in ap_rows if p.token_id}
+
+    positions = []
+    total_unrealized = 0.0
+    for t in trade_rows:
+        ap = ap_by_token.get(t.token_id) if t.token_id else None
+        entry_price = float(t.price or 0)
+        current_price = float(ap.current_price) if ap and ap.current_price else entry_price
+        shares = float(t.shares or 0)
+        if not shares and entry_price > 0:
+            shares = float(t.net_amount_usdc or 0) / entry_price
+        invested = float(t.net_amount_usdc or 0)
+        current_value = shares * current_price if current_price > 0 else invested
+        unrealized_pnl = current_value - invested
+        unrealized_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+        total_unrealized += unrealized_pnl
+        positions.append({
             "trade_id": t.trade_id,
             "market_question": t.market_question or (t.market_id or "")[:40],
-            "price": round(t.price or 0, 4),
-            "amount": round(t.net_amount_usdc or 0, 2),
-            "shares": round(t.shares or 0, 4),
+            "entry_price": round(entry_price, 4),
+            "current_price": round(current_price, 4),
+            "shares": round(shares, 4),
+            "invested": round(invested, 2),
+            "current_value": round(current_value, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "unrealized_pct": round(unrealized_pct, 1),
             "master_wallet": f"{t.master_wallet[:6]}...{t.master_wallet[-4:]}" if t.master_wallet else "",
             "master_wallet_full": t.master_wallet or "",
             "is_paper": t.is_paper,
             "created_at": t.created_at.isoformat() if t.created_at else None,
-        } for t in trades],
-        "count": len(trades),
+            "live": ap is not None,  # True si position_manager track le prix
+        })
+
+    return {
+        "positions": positions,
+        "count": len(positions),
+        "total_invested": round(sum(p["invested"] for p in positions), 2),
+        "total_current_value": round(sum(p["current_value"] for p in positions), 2),
+        "total_unrealized_pnl": round(total_unrealized, 2),
+        "last_update": datetime.utcnow().isoformat(),
     }
 
 
