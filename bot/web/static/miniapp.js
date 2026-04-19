@@ -5,17 +5,26 @@ const APP = { initData: tg?.initData || "", user: null, cache: new Map(), mainBt
 
 /* ── API ─────────────────────────────────────────── */
 async function api(path, opts = {}) {
-  const res = await fetch("/miniapp/api" + path, {
-    method: opts.method || "GET",
-    headers: { "Authorization": "tma " + APP.initData, "Content-Type": "application/json", ...(opts.headers || {}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
-  if (!res.ok) {
-    let msg = res.statusText;
-    try { const j = await res.json(); msg = j.detail || msg; } catch {}
-    throw new Error(msg);
+  let res;
+  try {
+    res = await fetch("/miniapp/api" + path, {
+      method: opts.method || "GET",
+      headers: { "Authorization": "tma " + APP.initData, "Content-Type": "application/json", ...(opts.headers || {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (netErr) {
+    throw new Error("Connexion réseau impossible (" + (netErr.message || "fetch failed") + ")");
   }
-  return res.json();
+  if (!res.ok) {
+    let detail = "";
+    try { const j = await res.json(); detail = j.detail || ""; } catch {}
+    const msg = detail || res.statusText || ("HTTP " + res.status);
+    throw new Error(`[${path}] ${msg} (HTTP ${res.status})`);
+  }
+  try { return await res.json(); }
+  catch (parseErr) {
+    throw new Error(`[${path}] Réponse invalide (${parseErr.message || "parse error"})`);
+  }
 }
 async function cached(key, fn, ttl = 20000) {
   const e = APP.cache.get(key);
@@ -124,14 +133,28 @@ async function dispatch() {
       clearMainBtn();
       window.scrollTo(0, 0);
       try { render(skeleton()); await r.handler(m); }
-      catch (e) { showError(e.message); }
+      catch (e) {
+        const msg = (e && (e.message || e.toString())) || "Une erreur s'est produite (sans détail)";
+        console.error("Route error", hash, e);
+        showError(msg);
+      }
       return;
     }
   }
   history.replaceState(null, "", "#home"); location.hash = "home";
 }
 function showError(msg) {
-  render(`<div class="empty"><div class="empty-icon">⚠️</div><div class="empty-title" style="color:var(--red)">Erreur</div><div class="empty-text">${esc(msg)}</div><button class="btn btn-secondary" style="max-width:200px;margin:0 auto" onclick="dispatch()">Réessayer</button></div>`);
+  const detail = msg && String(msg).trim() ? String(msg) : "Erreur inconnue (aucun message). Vérifiez les logs Docker du bot.";
+  render(`
+    <div class="empty">
+      <div class="empty-icon">⚠️</div>
+      <div class="empty-title" style="color:var(--red)">Erreur</div>
+      <div class="empty-text" style="word-break:break-word">${esc(detail)}</div>
+      <div style="display:grid;gap:10px;margin-top:16px;max-width:280px;margin-left:auto;margin-right:auto">
+        <button class="btn btn-primary" onclick="dispatch()">⟳ Réessayer</button>
+        <button class="btn btn-secondary" onclick="go('home')">🏠 Retour accueil</button>
+      </div>
+    </div>`);
 }
 
 /* ═══════════════════════════════════════════════════ HOME */
