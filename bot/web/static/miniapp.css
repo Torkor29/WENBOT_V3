@@ -888,6 +888,61 @@ select.input {
   .hero { background: linear-gradient(135deg, var(--card-bg) 0%, rgba(0,122,255,0.06) 100%); }
 }
 
+/* ── Header avec bouton ⋯ More ── */
+.header {
+  position: relative;
+}
+.header-btn {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255,255,255,0.06);
+  color: var(--tg-text);
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, transform 0.1s;
+  font-family: inherit;
+}
+.header-btn:active { transform: translateY(-50%) scale(0.92); }
+@media (prefers-color-scheme: light) {
+  .header-btn { background: rgba(0,0,0,0.06); }
+}
+
+/* ── Tab bar badge (unread notifs) ── */
+.tab-bar a .tab-icon { position: relative; display: inline-flex; }
+.tab-badge {
+  position: absolute;
+  top: -4px;
+  right: -10px;
+  background: var(--red);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  box-shadow: 0 0 0 2px var(--tg-secondary);
+}
+
+/* Notifs list — unread highlight */
+.list-item.is-unread { background: rgba(94,170,239,0.05); }
+@media (prefers-color-scheme: light) {
+  .list-item.is-unread { background: rgba(0,122,255,0.04); }
+}
+
 /* ── Balance cells (paper + live side-by-side) ── */
 .balance-cell {
   background: rgba(255,255,255,0.04);

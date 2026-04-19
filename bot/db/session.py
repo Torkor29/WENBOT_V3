@@ -124,6 +124,8 @@ async def init_db() -> None:
             "ALTER TABLE user_settings ADD COLUMN notify_on_buy BOOLEAN DEFAULT true",
             "ALTER TABLE user_settings ADD COLUMN notify_on_sell BOOLEAN DEFAULT true",
             "ALTER TABLE user_settings ADD COLUMN notify_on_sl_tp BOOLEAN DEFAULT true",
+            # Mini App notification feed (read marker)
+            "ALTER TABLE users ADD COLUMN last_notif_seen_at TIMESTAMP",
         ]
         for stmt in migrations:
             await _safe_add_column(conn, stmt)

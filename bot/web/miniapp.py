@@ -1518,3 +1518,149 @@ async def set_trader_filter(body: TraderFilterReq, user: User = Depends(get_curr
         await session.commit()
     return {"ok": True, "trader_filters": filters}
 
+
+# ─────────────────────────────────────────────────────────────────
+# NOTIFICATIONS FEED (Mini App)
+# Derived from trades + active_positions closed events.
+# Unread tracking via users.last_notif_seen_at.
+# ─────────────────────────────────────────────────────────────────
+def _trade_to_notif(t: Trade) -> dict:
+    side = (t.side.value if t.side else "").upper()
+    is_strat = bool(t.strategy_id)
+    icon = "🟢" if side == "BUY" else ("🔴" if side == "SELL" else "📊")
+    title = f"{icon} {side} {'(stratégie)' if is_strat else ''}".strip()
+    market = t.market_question or (t.market_id or "")[:40]
+    body_parts = []
+    if t.shares: body_parts.append(f"{t.shares:.2f} shares @ {t.price:.4f}")
+    if t.net_amount_usdc: body_parts.append(f"{t.net_amount_usdc:.2f} USDC")
+    if t.master_wallet: body_parts.append(f"via {t.master_wallet[:6]}…{t.master_wallet[-4:]}")
+    severity = "info"
+    if t.settlement_pnl is not None:
+        severity = "success" if t.settlement_pnl > 0 else ("error" if t.settlement_pnl < 0 else "info")
+        body_parts.append(f"PnL {'+' if t.settlement_pnl >= 0 else ''}{t.settlement_pnl:.2f}")
+    return {
+        "id": f"trade_{t.id}",
+        "kind": ("strategy_trade" if is_strat else f"copy_{side.lower()}"),
+        "title": title,
+        "market": market,
+        "body": " · ".join(body_parts) if body_parts else "",
+        "severity": severity,
+        "is_paper": t.is_paper,
+        "trade_id": t.trade_id,
+        "created_at": (t.created_at.isoformat() if t.created_at else None),
+        "ts": (t.created_at.timestamp() if t.created_at else 0),
+    }
+
+
+def _exit_to_notif(p) -> dict:
+    """active_position closed → notif."""
+    reason = (getattr(p, "close_reason", "") or "").lower()
+    icon_map = {
+        "sl_hit": "🛑", "tp_hit": "🎯", "trailing_stop": "📉",
+        "time_exit": "⏱", "scale_out": "✂️",
+    }
+    label_map = {
+        "sl_hit": "Stop Loss déclenché",
+        "tp_hit": "Take Profit atteint",
+        "trailing_stop": "Trailing stop sortie",
+        "time_exit": "Sortie temporelle",
+        "scale_out": "Take Profit partiel",
+    }
+    icon = icon_map.get(reason, "📤")
+    title = f"{icon} {label_map.get(reason, 'Position fermée')}"
+    market = getattr(p, "market_question", None) or (getattr(p, "market_id", "") or "")[:40]
+    pnl_pct = getattr(p, "pnl_pct", None) or 0
+    body_parts = []
+    body_parts.append(f"Entry {p.entry_price:.4f} → {p.current_price:.4f}")
+    if pnl_pct: body_parts.append(f"{'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%")
+    body_parts.append(f"{p.shares:.2f} sh")
+    severity = "success" if pnl_pct > 0 else ("error" if pnl_pct < 0 else "warning")
+    if reason == "sl_hit": severity = "error"
+    elif reason in ("tp_hit", "scale_out"): severity = "success"
+    return {
+        "id": f"exit_{p.id}",
+        "kind": "exit_" + (reason or "unknown"),
+        "title": title,
+        "market": market,
+        "body": " · ".join(body_parts),
+        "severity": severity,
+        "is_paper": False,
+        "trade_id": None,
+        "created_at": (p.closed_at.isoformat() if p.closed_at else None),
+        "ts": (p.closed_at.timestamp() if p.closed_at else 0),
+    }
+
+
+@router.get("/notifications")
+async def notifications_list(
+    limit: int = 50,
+    kind: Optional[str] = None,  # all | trades | exits
+    user: User = Depends(get_current_user),
+):
+    """Timeline of recent events for this user (trades + position exits)."""
+    from bot.models.active_position import ActivePosition
+    items: list[dict] = []
+    cutoff = datetime.utcnow() - timedelta(days=30)
+
+    async with async_session() as session:
+        if kind in (None, "all", "trades"):
+            trades = (await session.execute(
+                select(Trade).where(
+                    Trade.user_id == user.id,
+                    Trade.status == TradeStatus.FILLED,
+                    Trade.created_at >= cutoff,
+                ).order_by(Trade.created_at.desc()).limit(min(limit, 100))
+            )).scalars().all()
+            items.extend(_trade_to_notif(t) for t in trades)
+
+        if kind in (None, "all", "exits"):
+            exits = (await session.execute(
+                select(ActivePosition).where(
+                    ActivePosition.user_id == user.id,
+                    ActivePosition.is_closed == True,  # noqa: E712
+                    ActivePosition.closed_at.isnot(None),
+                    ActivePosition.closed_at >= cutoff,
+                ).order_by(ActivePosition.closed_at.desc()).limit(min(limit, 100))
+            )).scalars().all()
+            items.extend(_exit_to_notif(p) for p in exits)
+
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    items = items[:min(limit, 100)]
+
+    last_seen = getattr(user, "last_notif_seen_at", None)
+    last_seen_ts = last_seen.timestamp() if last_seen else 0
+    for it in items:
+        it["unread"] = it["ts"] > last_seen_ts
+
+    return {"items": items, "count": len(items), "last_seen": last_seen.isoformat() if last_seen else None}
+
+
+@router.get("/notifications/unread-count")
+async def notifications_unread_count(user: User = Depends(get_current_user)):
+    """Fast count of unread notifications (events after last_notif_seen_at)."""
+    from bot.models.active_position import ActivePosition
+    last_seen = getattr(user, "last_notif_seen_at", None) or datetime(1970, 1, 1)
+    async with async_session() as session:
+        n_trades = await session.scalar(select(func.count(Trade.id)).where(
+            Trade.user_id == user.id,
+            Trade.status == TradeStatus.FILLED,
+            Trade.created_at > last_seen,
+        )) or 0
+        n_exits = await session.scalar(select(func.count(ActivePosition.id)).where(
+            ActivePosition.user_id == user.id,
+            ActivePosition.is_closed == True,  # noqa: E712
+            ActivePosition.closed_at.isnot(None),
+            ActivePosition.closed_at > last_seen,
+        )) or 0
+    return {"unread": int(n_trades) + int(n_exits)}
+
+
+@router.post("/notifications/mark-read")
+async def notifications_mark_read(user: User = Depends(get_current_user)):
+    """Marks all current notifications as read."""
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        u.last_notif_seen_at = datetime.utcnow()
+        await session.commit()
+    return {"ok": True, "last_seen": u.last_notif_seen_at.isoformat()}
+

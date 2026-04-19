@@ -64,6 +64,9 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
 
+    # Mini App notification feed: events after this timestamp are "unread"
+    last_notif_seen_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+
     # Relationships
     settings: Mapped[Optional["UserSettings"]] = relationship(
         "UserSettings", back_populates="user", uselist=False, lazy="selectin"

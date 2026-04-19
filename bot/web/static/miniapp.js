@@ -108,7 +108,7 @@ const routes = [];
 function route(pattern, handler, opts={}) { routes.push({pattern, handler, opts}); }
 function go(hash) { location.hash = hash; }
 
-const KNOWN_TABS = ["home", "wallet", "copy", "strategies", "more"];
+const KNOWN_TABS = ["home", "wallet", "copy", "strategies", "notifs", "more"];
 
 async function dispatch() {
   let hash = location.hash.slice(1);
@@ -992,6 +992,11 @@ route(/^more$/, async () => {
         <div class="list-body"><div class="list-title">Réglages</div><div class="list-sub">Mode, capital, risque, smart analysis</div></div>
         <div class="list-chevron">›</div>
       </div>
+      <div class="list-item" onclick="go('more/notifs-tg')">
+        <div class="list-icon">🔔</div>
+        <div class="list-body"><div class="list-title">Notifications Telegram</div><div class="list-sub">Destination + filtres événements</div></div>
+        <div class="list-chevron">›</div>
+      </div>
       <div class="list-item" onclick="go('more/reports')">
         <div class="list-icon">📊</div>
         <div class="list-body"><div class="list-title">Rapports</div><div class="list-sub">PnL, traders, marchés · Export HTML/PDF</div></div>
@@ -1329,6 +1334,138 @@ window._exportReport = function(period) {
   toast("Rapport ouvert ↗");
 };
 
+/* ═══════════════════════════════════════════════════ NOTIFS — Mini App feed */
+route(/^notifs$/, async () => { go("notifs/all"); });
+
+const notifsNav = (active) => subNav([
+  {label:"Tout", href:"notifs/all"},
+  {label:"Trades", href:"notifs/trades"},
+  {label:"Sorties", href:"notifs/exits"},
+], active);
+
+route(/^notifs\/(all|trades|exits)$/, async (m) => {
+  const filter = m[1];
+  const data = await api("/notifications?limit=80&kind=" + filter);
+  // Auto-mark all read once we visit any tab
+  api("/notifications/mark-read", {method: "POST"}).catch(() => {});
+  setTimeout(() => updateNotifBadge(0), 200);
+
+  const sevColor = (s) => s === "success" ? "var(--green)" : s === "error" ? "var(--red)" : s === "warning" ? "var(--orange)" : "var(--tg-link)";
+  const items = data.items || [];
+
+  render(`
+    <div class="page-title">🔔 Notifications</div>
+    <div class="small" style="margin-bottom:12px">Tous les événements de votre bot — trades exécutés, sorties de positions, alerts.</div>
+    ${notifsNav("notifs/" + filter)}
+
+    ${items.length === 0
+      ? emptyState("📭", "Aucune notification", "Les événements apparaîtront ici dès qu'un trade ou une sortie aura lieu.")
+      : `<div class="card card-flush"><div class="list">${items.map(it => `
+          <div class="list-item ${it.unread?'is-unread':''}" style="border-left:3px solid ${sevColor(it.severity)}">
+            <div class="list-body">
+              <div class="list-title" style="display:flex;align-items:center;gap:6px">
+                ${it.unread?'<span style="width:8px;height:8px;background:var(--tg-btn);border-radius:50%;flex-shrink:0"></span>':''}
+                ${esc(it.title)}
+                ${it.is_paper ? badge("PAPER","orange") : ""}
+              </div>
+              <div class="list-sub" style="font-size:13px;color:var(--tg-text);margin-top:2px">${esc(it.market)}</div>
+              <div class="list-sub" style="margin-top:4px">${esc(it.body)} · ${timeAgo(it.created_at)}</div>
+            </div>
+          </div>`).join("")}</div></div>`}
+  `);
+}, {tab: "notifs"});
+
+async function updateNotifBadge(forceCount = null) {
+  const el = document.getElementById("notif-badge");
+  if (!el) return;
+  let n = forceCount;
+  if (n === null) {
+    try { const r = await api("/notifications/unread-count"); n = r.unread || 0; }
+    catch { n = 0; }
+  }
+  if (n > 0) {
+    el.textContent = n > 99 ? "99+" : String(n);
+    el.style.display = "inline-flex";
+  } else {
+    el.style.display = "none";
+  }
+}
+
+/* Poll badge every 20s when app is visible */
+let _badgeTimer = null;
+function startBadgePoller() {
+  if (_badgeTimer) clearInterval(_badgeTimer);
+  updateNotifBadge();
+  _badgeTimer = setInterval(() => {
+    if (document.visibilityState === "visible") updateNotifBadge();
+  }, 20000);
+}
+
+/* ═══════════════════════════════════════════════════ NOTIFICATIONS TG (sub-page de Settings) */
+route(/^more\/notifs-tg$/, async () => {
+  const s = await api("/settings");
+  render(`
+    <div class="page-title">🔔 Notifications Telegram</div>
+    <div class="small" style="margin-bottom:14px">Configurez ce que vous recevez sur Telegram (DM ou groupe). La Mini App garde toujours l'historique complet dans l'onglet 🔔 Notifs.</div>
+
+    <div class="card">
+      <div class="card-title">📍 Destination</div>
+      <div class="form-row">
+        <label class="label">Où recevoir les notifs Telegram ?</label>
+        <select class="input" data-key="notification_mode">
+          <option value="dm" ${s.notification_mode==='dm'?'selected':''}>📱 Direct message (privé)</option>
+          <option value="group" ${s.notification_mode==='group'?'selected':''}>👥 Groupe (topic dédié)</option>
+          <option value="both" ${s.notification_mode==='both'?'selected':''}>📨 Les deux</option>
+        </select>
+        <div class="input-hint">Si vous choisissez "Groupe", le bot envoie les notifs dans les topics correspondants (Signals, Alerts, etc.) du groupe que vous avez configuré.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🎚 Quels événements recevoir ?</div>
+      <label class="toggle-row">
+        <div>
+          <div class="toggle-label">🟢 Trades BUY exécutés</div>
+          <div class="toggle-sub">Notification à chaque ouverture de position (achat copié)</div>
+        </div>
+        <div class="toggle"><input type="checkbox" data-key="notify_on_buy" ${s.notify_on_buy?'checked':''}><span class="slider"></span></div>
+      </label>
+      <label class="toggle-row">
+        <div>
+          <div class="toggle-label">🔴 Trades SELL exécutés</div>
+          <div class="toggle-sub">Notification à chaque vente copiée (sortie initiée par le master)</div>
+        </div>
+        <div class="toggle"><input type="checkbox" data-key="notify_on_sell" ${s.notify_on_sell?'checked':''}><span class="slider"></span></div>
+      </label>
+      <label class="toggle-row">
+        <div>
+          <div class="toggle-label">🛑🎯 Sorties auto (SL/TP/Trailing/Time/Scale)</div>
+          <div class="toggle-sub">Notification quand le bot ferme une position automatiquement (Stop Loss, Take Profit, trailing stop, time exit, scale out)</div>
+        </div>
+        <div class="toggle"><input type="checkbox" data-key="notify_on_sl_tp" ${s.notify_on_sl_tp?'checked':''}><span class="slider"></span></div>
+      </label>
+    </div>
+
+    <div class="alert info">
+      <h4>💡 Astuce</h4>
+      <p>Même si vous coupez certaines notifs Telegram, l'onglet <b>🔔 Notifs</b> de la Mini App garde TOUT l'historique. Vous pouvez consulter à tout moment ce que le bot a fait.</p>
+    </div>
+
+    <button class="btn btn-secondary" onclick="go('notifs')">📂 Voir l'historique complet</button>
+  `);
+  setBack("more");
+
+  document.querySelectorAll("[data-key]").forEach(el => {
+    const key = el.dataset.key;
+    const send = async () => {
+      const val = el.type === "checkbox" ? el.checked : el.value;
+      try { await api("/settings", {method:"POST", body:{[key]: val}}); toast("✓ Sauvegardé"); }
+      catch (e) { toast(e.message, "error"); }
+    };
+    el.addEventListener("change", send);
+  });
+}, {tab: "more", back: "more"});
+
 /* ═══════════════════════════════════════════════════ BOOTSTRAP */
 async function loadUser() { APP.user = await api("/me"); return APP.user; }
 
@@ -1350,18 +1487,25 @@ async function init() {
     return;
   }
   document.getElementById("app").innerHTML = `
-    <div class="header">WENPOLYMARKET<div class="header-sub">Polymarket Copy &amp; Strategies</div></div>
+    <div class="header">
+      <button class="header-btn" id="header-more" onclick="go('more')" title="Plus">⋯</button>
+      <div class="header-title">WENPOLYMARKET<div class="header-sub">Polymarket Copy &amp; Strategies</div></div>
+    </div>
     <div id="content" class="page"></div>
     <div class="tab-bar">
       <a href="#home" data-tab="home"><span class="tab-icon">🏠</span><span>Accueil</span></a>
       <a href="#wallet" data-tab="wallet"><span class="tab-icon">💰</span><span>Wallet</span></a>
       <a href="#copy" data-tab="copy"><span class="tab-icon">👥</span><span>Copy</span></a>
       <a href="#strategies" data-tab="strategies"><span class="tab-icon">🎯</span><span>Stratégies</span></a>
-      <a href="#more" data-tab="more"><span class="tab-icon">⋯</span><span>Plus</span></a>
+      <a href="#notifs" data-tab="notifs">
+        <span class="tab-icon">🔔<span class="tab-badge" id="notif-badge" style="display:none">0</span></span>
+        <span>Notifs</span>
+      </a>
     </div>`;
   try { await loadUser(); }
   catch (e) { showError("Impossible de charger le profil: " + e.message); return; }
   window.addEventListener("hashchange", dispatch);
+  startBadgePoller();
   dispatch();
 }
 
