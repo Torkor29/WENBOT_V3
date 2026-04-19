@@ -888,6 +888,24 @@ select.input {
   .hero { background: linear-gradient(135deg, var(--card-bg) 0%, rgba(0,122,255,0.06) 100%); }
 }
 
+/* ── Balance cells (paper + live side-by-side) ── */
+.balance-cell {
+  background: rgba(255,255,255,0.04);
+  border: 2px solid transparent;
+  border-radius: 12px;
+  padding: 12px;
+  transition: all 0.2s;
+}
+.balance-cell.is-active {
+  background: rgba(94,170,239,0.08);
+  border-color: var(--tg-btn);
+}
+.balance-cell .tiny { margin-bottom: 4px; }
+@media (prefers-color-scheme: light) {
+  .balance-cell { background: rgba(0,0,0,0.04); }
+  .balance-cell.is-active { background: rgba(0,122,255,0.08); }
+}
+
 /* ── Mode banner Paper/Live ── */
 .mode-banner {
   display: flex;

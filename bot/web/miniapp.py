@@ -50,6 +50,10 @@ async def get_current_user(request: Request) -> User:
 
 
 # ── Request models ───────────────────────────────────────────────
+# NOTE: only fields with actual backend wiring are exposed.
+# Removed: notify_on_buy/sell/sl_tp (no DB column), time_exit_*, scale_out_*,
+#          auto_pause_cold_traders, cold_trader_threshold, hot_streak_boost,
+#          use_gamma_monitor, use_ws_monitor, auto_bridge_sol (cosmetic only)
 class SettingsUpdate(BaseModel):
     # User flags
     paper_trading: Optional[bool] = None
@@ -73,21 +77,14 @@ class SettingsUpdate(BaseModel):
     take_profit_pct: Optional[float] = None
     trailing_stop_enabled: Optional[bool] = None
     trailing_stop_pct: Optional[float] = None
-    time_exit_enabled: Optional[bool] = None
-    time_exit_hours: Optional[int] = None
-    scale_out_enabled: Optional[bool] = None
-    scale_out_pct: Optional[float] = None
 
     # Copy behaviour
     copy_delay_seconds: Optional[int] = None
     manual_confirmation: Optional[bool] = None
     confirmation_threshold_usdc: Optional[float] = None
-    auto_bridge_sol: Optional[bool] = None
 
-    # Gas & monitoring
+    # Gas
     gas_mode: Optional[str] = None             # normal | fast | ultra | instant
-    use_gamma_monitor: Optional[bool] = None
-    use_ws_monitor: Optional[bool] = None
 
     # Filters
     categories: Optional[list] = None
@@ -99,11 +96,6 @@ class SettingsUpdate(BaseModel):
     max_positions: Optional[int] = None
     max_category_exposure_pct: Optional[float] = None
     max_direction_bias_pct: Optional[float] = None
-
-    # Trader tracking
-    auto_pause_cold_traders: Optional[bool] = None
-    cold_trader_threshold: Optional[float] = None
-    hot_streak_boost: Optional[float] = None
 
     # Smart filter & signal scoring
     signal_scoring_enabled: Optional[bool] = None
@@ -118,9 +110,6 @@ class SettingsUpdate(BaseModel):
 
     # Notifications
     notification_mode: Optional[str] = None    # dm | group | both
-    notify_on_buy: Optional[bool] = None
-    notify_on_sell: Optional[bool] = None
-    notify_on_sl_tp: Optional[bool] = None
 
     # Strategy bucket
     strategy_trade_fee_rate: Optional[float] = None
@@ -276,17 +265,6 @@ async def control_resume(user: User = Depends(get_current_user)):
     return {"ok": True, "state": "running"}
 
 
-@router.post("/controls/stop")
-async def control_stop(user: User = Depends(get_current_user)):
-    async with async_session() as session:
-        u = await session.get(User, user.id)
-        u.is_active = False
-        u.is_paused = True
-        await session.commit()
-    logger.info(f"User {user.id} stopped copy trading")
-    return {"ok": True, "state": "stopped"}
-
-
 @router.get("/controls/status")
 async def control_status(user: User = Depends(get_current_user)):
     state = "stopped" if not user.is_active else ("paused" if user.is_paused else "running")
@@ -338,11 +316,20 @@ async def wallet_import(body: ImportPkReq, user: User = Depends(get_current_user
 async def wallet_balance(user: User = Depends(get_current_user)):
     if not user.wallet_address:
         raise HTTPException(404, "No wallet configured")
+    usdc = 0.0; matic = 0.0; usdc_error = None; matic_error = None
     try: usdc = await web3_client.get_usdc_balance(user.wallet_address)
-    except Exception as e: logger.warning(f"get_usdc_balance failed: {e}"); usdc = 0.0
+    except Exception as e:
+        logger.warning(f"get_usdc_balance failed: {e}"); usdc_error = "RPC indisponible"
     try: matic = await web3_client.get_matic_balance(user.wallet_address)
-    except Exception as e: logger.warning(f"get_matic_balance failed: {e}"); matic = 0.0
-    return {"address": user.wallet_address, "usdc": round(float(usdc), 4), "matic": round(float(matic), 6)}
+    except Exception as e:
+        logger.warning(f"get_matic_balance failed: {e}"); matic_error = "RPC indisponible"
+    return {
+        "address": user.wallet_address,
+        "usdc": round(float(usdc), 4),
+        "matic": round(float(matic), 6),
+        "usdc_error": usdc_error,
+        "matic_error": matic_error,
+    }
 
 
 @router.post("/wallet/withdraw")
@@ -402,19 +389,19 @@ async def get_copy_stats(user: User = Depends(get_current_user)):
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     async with async_session() as session:
         total = await session.scalar(select(func.count(Trade.id)).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
             Trade.status == TradeStatus.FILLED)) or 0  # noqa: E711
         today = await session.scalar(select(func.count(Trade.id)).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
             Trade.status == TradeStatus.FILLED, Trade.created_at >= today_start)) or 0
         volume = await session.scalar(select(func.sum(Trade.gross_amount_usdc)).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
             Trade.status == TradeStatus.FILLED)) or 0.0
         total_pnl = await session.scalar(select(func.sum(Trade.settlement_pnl)).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
-            Trade.is_settled == True, Trade.settlement_pnl != None)) or 0.0  # noqa: E712,E711
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
+            Trade.is_settled == True, Trade.settlement_pnl.isnot(None))) or 0.0  # noqa: E712,E711
         open_count = await session.scalar(select(func.count(Trade.id)).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
             Trade.side == TradeSide.BUY, Trade.status == TradeStatus.FILLED,
             Trade.is_settled == False)) or 0  # noqa: E712
     return {
@@ -428,7 +415,7 @@ async def get_copy_stats(user: User = Depends(get_current_user)):
 async def get_copy_positions(user: User = Depends(get_current_user)):
     async with async_session() as session:
         result = await session.execute(select(Trade).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
             Trade.side == TradeSide.BUY, Trade.status == TradeStatus.FILLED,
             Trade.is_settled == False).order_by(Trade.created_at.desc()).limit(50))
         trades = result.scalars().all()
@@ -452,7 +439,7 @@ async def get_copy_positions(user: User = Depends(get_current_user)):
 async def get_copy_trades(limit: int = 20, offset: int = 0, user: User = Depends(get_current_user)):
     async with async_session() as session:
         result = await session.execute(select(Trade).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
             Trade.status == TradeStatus.FILLED).order_by(Trade.created_at.desc())
             .limit(min(limit, 50)).offset(max(offset, 0)))
         trades = result.scalars().all()
@@ -490,7 +477,7 @@ async def get_copy_traders(user: User = Depends(get_current_user)):
                 Trade.status == TradeStatus.FILLED)) or 0.0
             pnl = await session.scalar(select(func.sum(Trade.settlement_pnl)).where(
                 Trade.user_id == user.id, Trade.master_wallet == w.lower(),
-                Trade.is_settled == True, Trade.settlement_pnl != None)) or 0.0  # noqa: E712,E711
+                Trade.is_settled == True, Trade.settlement_pnl.isnot(None))) or 0.0  # noqa: E712,E711
             traders.append({
                 "wallet": w,
                 "wallet_short": f"{w[:6]}...{w[-4:]}",
@@ -545,7 +532,7 @@ async def trader_detail(wallet: str, user: User = Depends(get_current_user)):
             Trade.status == TradeStatus.FILLED)) or 0.0
         pnl = await session.scalar(select(func.sum(Trade.settlement_pnl)).where(
             Trade.user_id == user.id, Trade.master_wallet == w_lower,
-            Trade.is_settled == True, Trade.settlement_pnl != None)) or 0.0  # noqa: E712,E711
+            Trade.is_settled == True, Trade.settlement_pnl.isnot(None))) or 0.0  # noqa: E712,E711
         wins = await session.scalar(select(func.count(Trade.id)).where(
             Trade.user_id == user.id, Trade.master_wallet == w_lower,
             Trade.is_settled == True, Trade.settlement_pnl > 0)) or 0  # noqa: E712
@@ -662,7 +649,7 @@ async def strat_patch_sub(strategy_id: str, body: SubscriptionPatch, user: User 
 async def get_strategy_trades(limit: int = 20, offset: int = 0, user: User = Depends(get_current_user)):
     async with async_session() as session:
         trades = (await session.execute(select(Trade).where(
-            Trade.user_id == user.id, Trade.strategy_id != None,
+            Trade.user_id == user.id, Trade.strategy_id.isnot(None),
             Trade.status == TradeStatus.FILLED).order_by(Trade.created_at.desc())
             .limit(min(limit, 50)).offset(max(offset, 0)))).scalars().all()
     return {"trades": [{
@@ -682,17 +669,17 @@ async def get_strategy_trades(limit: int = 20, offset: int = 0, user: User = Dep
 async def get_strategy_stats(user: User = Depends(get_current_user)):
     async with async_session() as session:
         total = await session.scalar(select(func.count(Trade.id)).where(
-            Trade.user_id == user.id, Trade.strategy_id != None,
+            Trade.user_id == user.id, Trade.strategy_id.isnot(None),
             Trade.status == TradeStatus.FILLED)) or 0  # noqa: E711
         total_pnl = await session.scalar(select(func.sum(Trade.pnl)).where(
-            Trade.user_id == user.id, Trade.strategy_id != None,
-            Trade.pnl != None)) or 0.0  # noqa: E711
+            Trade.user_id == user.id, Trade.strategy_id.isnot(None),
+            Trade.pnl.isnot(None))) or 0.0  # noqa: E711
         wins = await session.scalar(select(func.count(Trade.id)).where(
-            Trade.user_id == user.id, Trade.strategy_id != None,
+            Trade.user_id == user.id, Trade.strategy_id.isnot(None),
             Trade.result == "WON")) or 0
         resolved = await session.scalar(select(func.count(Trade.id)).where(
-            Trade.user_id == user.id, Trade.strategy_id != None,
-            Trade.result != None)) or 0  # noqa: E711
+            Trade.user_id == user.id, Trade.strategy_id.isnot(None),
+            Trade.result.isnot(None))) or 0  # noqa: E711
         subs = await session.scalar(select(func.count(Subscription.id)).where(
             Subscription.user_id == user.id, Subscription.is_active == True)) or 0  # noqa: E712
     return {
@@ -740,11 +727,15 @@ async def strat_wallet_import(body: ImportPkReq, user: User = Depends(get_curren
 async def strat_wallet_balance(user: User = Depends(get_current_user)):
     addr = getattr(user, "strategy_wallet_address", None)
     if not addr: raise HTTPException(404, "No strategy wallet")
+    usdc = 0.0; matic = 0.0; usdc_error = None; matic_error = None
     try: usdc = await web3_client.get_usdc_balance(addr)
-    except Exception: usdc = 0.0
+    except Exception as e: usdc_error = "RPC indisponible"; logger.warning(f"strat usdc balance: {e}")
     try: matic = await web3_client.get_matic_balance(addr)
-    except Exception: matic = 0.0
-    return {"address": addr, "usdc": round(float(usdc), 4), "matic": round(float(matic), 6)}
+    except Exception as e: matic_error = "RPC indisponible"; logger.warning(f"strat matic balance: {e}")
+    return {
+        "address": addr, "usdc": round(float(usdc), 4), "matic": round(float(matic), 6),
+        "usdc_error": usdc_error, "matic_error": matic_error,
+    }
 
 
 @router.delete("/strategy-wallet")
@@ -796,19 +787,14 @@ async def get_settings(user: User = Depends(get_current_user)):
             # risk
             "stop_loss_enabled", "stop_loss_pct", "take_profit_enabled", "take_profit_pct",
             "trailing_stop_enabled", "trailing_stop_pct",
-            "time_exit_enabled", "time_exit_hours",
-            "scale_out_enabled", "scale_out_pct",
             # copy
             "copy_delay_seconds", "manual_confirmation", "confirmation_threshold_usdc",
-            "auto_bridge_sol",
-            # gas / monitor
-            "gas_mode", "use_gamma_monitor", "use_ws_monitor",
+            # gas
+            "gas_mode",
             # filters
             "categories", "blacklisted_markets", "max_expiry_days", "trader_filters",
             # portfolio
             "max_positions", "max_category_exposure_pct", "max_direction_bias_pct",
-            # trader tracking
-            "auto_pause_cold_traders", "cold_trader_threshold", "hot_streak_boost",
             # scoring / smart
             "signal_scoring_enabled", "min_signal_score", "scoring_criteria",
             "smart_filter_enabled", "min_trader_winrate_for_type", "min_trader_trades_for_type",
@@ -1125,8 +1111,8 @@ async def report_by_trader(user: User = Depends(get_current_user)):
             func.sum(Trade.gross_amount_usdc).label("volume"),
             func.sum(Trade.settlement_pnl).label("pnl"),
         ).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
-            Trade.status == TradeStatus.FILLED, Trade.master_wallet != None
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
+            Trade.status == TradeStatus.FILLED, Trade.master_wallet.isnot(None)
         ).group_by(Trade.master_wallet))).all()  # noqa: E711
     data = [{
         "wallet": r.master_wallet,
@@ -1198,8 +1184,8 @@ async def report_export_html(
             func.sum(Trade.gross_amount_usdc).label("volume"),
             func.sum(Trade.settlement_pnl).label("pnl"),
         ).where(
-            Trade.user_id == user.id, Trade.strategy_id == None,
-            Trade.status == TradeStatus.FILLED, Trade.master_wallet != None
+            Trade.user_id == user.id, Trade.strategy_id.is_(None),
+            Trade.status == TradeStatus.FILLED, Trade.master_wallet.isnot(None)
         ).group_by(Trade.master_wallet))).all()  # noqa: E711
         mk_rows = (await session.execute(select(
             Trade.market_id, Trade.market_question,
@@ -1412,29 +1398,43 @@ async def discover_top_traders(
     base_url = "https://lb-api.polymarket.com/profit"
     params = {"window": period if period in ("day","week","month","all") else "month", "limit": min(limit, 50)}
     try:
-        async with httpx.AsyncClient(timeout=8) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(base_url, params=params)
             if r.status_code == 200:
                 data = r.json()
-                items = data if isinstance(data, list) else data.get("users", [])
+                # Try multiple response shapes (Polymarket API has changed over time)
+                items = []
+                if isinstance(data, list):
+                    items = data
+                elif isinstance(data, dict):
+                    for key in ("users", "data", "items", "leaderboard", "results"):
+                        if key in data and isinstance(data[key], list):
+                            items = data[key]; break
                 for t in items[:limit]:
-                    addr = (t.get("proxyWallet") or t.get("walletAddress") or t.get("address") or "").lower()
-                    if not addr:
+                    if not isinstance(t, dict):
+                        continue
+                    addr = (t.get("proxyWallet") or t.get("walletAddress") or t.get("address")
+                            or t.get("user") or t.get("wallet") or "").lower().strip()
+                    if not addr or not addr.startswith("0x") or len(addr) != 42:
                         continue
                     traders.append({
                         "wallet": addr,
-                        "wallet_short": f"{addr[:6]}...{addr[-4:]}" if len(addr) >= 10 else addr,
-                        "username": t.get("name") or t.get("username") or "",
-                        "pnl": round(float(t.get("profit") or t.get("pnl") or 0), 2),
-                        "volume": round(float(t.get("volume") or 0), 2),
-                        "trades_count": int(t.get("trades") or t.get("numTrades") or 0),
-                        "profile_image": t.get("profileImage") or "",
+                        "wallet_short": f"{addr[:6]}...{addr[-4:]}",
+                        "username": t.get("name") or t.get("username") or t.get("displayName") or "",
+                        "pnl": round(float(t.get("profit") or t.get("pnl") or t.get("pnlUsd") or 0), 2),
+                        "volume": round(float(t.get("volume") or t.get("volumeUsd") or 0), 2),
+                        "trades_count": int(t.get("trades") or t.get("numTrades") or t.get("tradesCount") or 0),
+                        "profile_image": t.get("profileImage") or t.get("avatar") or "",
                     })
+                if not traders:
+                    err = "Polymarket a répondu mais le format n'est pas reconnu — réessayez plus tard"
             else:
-                err = f"API retourne {r.status_code}"
+                err = f"Polymarket renvoie {r.status_code}"
+    except httpx.TimeoutException:
+        err = "Timeout — Polymarket trop lent"
     except Exception as e:
         logger.warning(f"discover_top_traders failed: {e}")
-        err = str(e)
+        err = "Erreur de connexion à Polymarket"
 
     # Mark which ones user already follows
     followed = set()

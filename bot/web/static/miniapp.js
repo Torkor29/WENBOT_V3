@@ -154,17 +154,32 @@ route(/^home$/, async () => {
   if (me.wallet_address) {
     try {
       const bal = await cached("wallet-bal", () => api("/wallet/balance"), 15000);
+      const usedBadge = me.paper_trading
+        ? badge("📝 PAPER actif", "orange")
+        : badge("💵 LIVE actif", "green");
+      const rpcWarn = (bal.usdc_error || bal.matic_error)
+        ? `<div class="small" style="color:var(--orange);margin-top:6px">⚠ ${esc(bal.usdc_error || bal.matic_error)}</div>` : "";
       balanceCard = `
         <div class="card">
           <div class="card-header">
-            <div class="tiny">Solde · ${stateBadge(me)}</div>
+            <div class="tiny">Soldes · ${stateBadge(me)}</div>
             <a class="card-action" onclick="go('wallet')">Gérer ›</a>
           </div>
-          <div style="display:flex;align-items:baseline;gap:16px;margin-bottom:10px">
-            <div><span style="font-size:22px;font-weight:700">${fmtUsd(me.paper_trading ? me.paper_balance : bal.usdc)}</span><span class="small" style="margin-left:4px">${me.paper_trading ? 'paper' : 'USDC'}</span></div>
-            ${!me.paper_trading ? `<div class="small">${bal.matic.toFixed(4)} MATIC</div>` : ''}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div class="balance-cell ${me.paper_trading?'is-active':''}">
+              <div class="tiny">📝 Paper</div>
+              <div style="font-size:18px;font-weight:700">${fmtUsd(me.paper_balance)}</div>
+              <div class="small">USDC fictif</div>
+            </div>
+            <div class="balance-cell ${!me.paper_trading?'is-active':''}">
+              <div class="tiny">💵 Live (on-chain)</div>
+              <div style="font-size:18px;font-weight:700">${fmtUsd(bal.usdc)}</div>
+              <div class="small">${bal.matic.toFixed(4)} MATIC</div>
+            </div>
           </div>
-          <div class="btn-row">
+          <div style="margin-top:8px">${usedBadge}<span class="small" style="margin-left:6px">utilisé pour les trades</span></div>
+          ${rpcWarn}
+          <div class="btn-row" style="margin-top:12px">
             <button class="btn btn-primary btn-sm" onclick="go('wallet/copy/deposit')">📥 Déposer</button>
             <button class="btn btn-secondary btn-sm" onclick="go('wallet/copy/withdraw')">📤 Retirer</button>
           </div>
@@ -261,18 +276,36 @@ route(/^wallet\/copy$/, async () => {
     `);
     return;
   }
-  const bal = await api("/wallet/balance").catch(() => ({usdc:0, matic:0, address:me.wallet_address}));
+  const bal = await api("/wallet/balance").catch(() => ({usdc:0, matic:0, address:me.wallet_address, usdc_error:"Erreur réseau"}));
+  const rpcErr = bal.usdc_error || bal.matic_error;
   render(`
     ${modeBadge(me)}
     <div class="page-title">Wallet</div>
     ${walletNav("wallet/copy")}
-    <div class="hero">
-      <div class="hero-value">${fmtUsd(me.paper_trading ? me.paper_balance : bal.usdc)}</div>
-      <div class="hero-label">${me.paper_trading ? "USDC fictif (paper)" : "USDC disponible"}</div>
-      ${!me.paper_trading ? `<div class="small" style="margin-top:10px">${bal.matic.toFixed(4)} MATIC · gas</div>` : ""}
-    </div>
+
     <div class="card">
-      <div class="tiny" style="margin-bottom:8px">Adresse Polygon</div>
+      <div class="card-title">💼 Soldes du wallet</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="balance-cell ${me.paper_trading?'is-active':''}">
+          <div class="tiny">📝 Paper</div>
+          <div style="font-size:24px;font-weight:700">${fmtUsd(me.paper_balance)}</div>
+          <div class="small">Solde fictif (simulation)</div>
+        </div>
+        <div class="balance-cell ${!me.paper_trading?'is-active':''}">
+          <div class="tiny">💵 Live (on-chain)</div>
+          <div style="font-size:24px;font-weight:700">${fmtUsd(bal.usdc)}</div>
+          <div class="small">${bal.matic.toFixed(4)} MATIC · gas</div>
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        ${me.paper_trading ? badge("📝 PAPER actif", "orange") : badge("💵 LIVE actif", "green")}
+        <span class="small" style="margin-left:6px">utilisé pour vos trades</span>
+      </div>
+      ${rpcErr ? `<div class="small" style="color:var(--orange);margin-top:6px">⚠ ${esc(rpcErr)}</div>` : ""}
+    </div>
+
+    <div class="card">
+      <div class="tiny" style="margin-bottom:8px">Adresse Polygon (recevez USDC ici)</div>
       <div class="addr-box mono" onclick="copy('${bal.address}')">${bal.address}</div>
     </div>
     <div class="btn-row">
@@ -571,14 +604,14 @@ route(/^copy\/discover$/, async () => { go("copy/discover/month"); }, {tab: "cop
 
 route(/^copy\/discover\/(day|week|month|all)$/, async (m) => {
   const period = m[1];
-  const [d, traders] = await Promise.all([
+  const [d, traders, positions] = await Promise.all([
     cached("discover-" + period, () => api("/discover/top-traders?period=" + period), 60000),
-    cached("copy-traders-count", () => api("/copy/traders"), 10000),
+    cached("copy-traders", () => api("/copy/traders"), 10000),
+    cached("copy-positions", () => api("/copy/positions")),
   ]);
-  const positions = await cached("copy-positions", () => api("/copy/positions"));
   render(`
     <div class="page-title">Copy Trading</div>
-    ${copyNav("copy/discover", {traders: traders.count, positions: positions.count})}
+    ${copyNav("copy/discover", {traders: traders?.count || 0, positions: positions?.count || 0})}
     <div class="small" style="margin-bottom:12px">Top traders Polymarket par profit. Ajoute en 1 clic.</div>
     ${subNav([
       {label:"24h", href:"copy/discover/day"},
@@ -1050,20 +1083,13 @@ route(/^more\/settings$/, async () => {
       ${num("take_profit_pct", "Take Profit %", s.take_profit_pct, 1, 1, 500)}
       ${tgl("trailing_stop_enabled", "Trailing stop", "SL qui suit le prix", s.trailing_stop_enabled)}
       ${num("trailing_stop_pct", "Trailing %", s.trailing_stop_pct, 1, 1, 100)}
-      ${tgl("time_exit_enabled", "Time exit", "Close après X heures", s.time_exit_enabled)}
-      ${num("time_exit_hours", "Heures", s.time_exit_hours, 1, 1, 720)}
-      ${tgl("scale_out_enabled", "Scale out", "TP partiel", s.scale_out_enabled)}
-      ${num("scale_out_pct", "% TP1", s.scale_out_pct, 5, 5, 95)}
     </div>
 
     <div class="card">
       <div class="card-title">📊 Risque portefeuille</div>
-      ${num("max_positions", "Max positions", s.max_positions, 1, 1, 100)}
+      ${num("max_positions", "Max positions ouvertes", s.max_positions, 1, 1, 100)}
       ${num("max_category_exposure_pct", "Max % / catégorie", s.max_category_exposure_pct, 5, 5, 100)}
       ${num("max_direction_bias_pct", "Max biais YES/NO %", s.max_direction_bias_pct, 5, 50, 100)}
-      ${tgl("auto_pause_cold_traders", "Pause auto cold traders", null, s.auto_pause_cold_traders)}
-      ${num("cold_trader_threshold", "Seuil cold %", s.cold_trader_threshold, 1, 0, 100)}
-      ${num("hot_streak_boost", "Boost hot streak", s.hot_streak_boost, 0.1, 1, 5)}
     </div>
 
     <div class="card">
@@ -1078,10 +1104,8 @@ route(/^more\/settings$/, async () => {
     <div class="card">
       <div class="card-title">🔔 Notifications</div>
       ${sel("notification_mode", "Destination", s.notification_mode || "dm",
-        [{value:"dm", label:"📱 Direct message"},{value:"group", label:"👥 Groupe"},{value:"both", label:"📨 Les deux"}])}
-      ${tgl("notify_on_buy", "Sur achats", null, s.notify_on_buy)}
-      ${tgl("notify_on_sell", "Sur ventes", null, s.notify_on_sell)}
-      ${tgl("notify_on_sl_tp", "SL / TP", null, s.notify_on_sl_tp)}
+        [{value:"dm", label:"📱 Direct message"},{value:"group", label:"👥 Groupe (topic)"},{value:"both", label:"📨 Les deux"}],
+        "Où recevez les alertes de trades exécutés / SL/TP / erreurs")}
     </div>
 
     <div class="card">
@@ -1120,24 +1144,26 @@ window._applyProfile = async function(profile) {
   catch (e) { toast(e.message, "error"); }
 };
 
-/* ═══════════════════════════════════════════════════ RAPPORTS (fusion Analytics + Reports) */
-route(/^more\/reports$/, async () => { go("more/reports/overview"); }, {tab: "more", back: "more"});
+/* ═══════════════════════════════════════════════════ RAPPORTS (split: Mes trades / Mes traders) */
+route(/^more\/reports$/, async () => { go("more/reports/me"); }, {tab: "more", back: "more"});
 
 const reportsNav = (active) => subNav([
-  {label:"Aperçu", href:"more/reports/overview"},
-  {label:"Traders", href:"more/reports/traders"},
-  {label:"Marchés", href:"more/reports/markets"},
-  {label:"Export", href:"more/reports/export"},
+  {label:"📊 Mes trades", href:"more/reports/me"},
+  {label:"👥 Mes traders", href:"more/reports/traders"},
+  {label:"📄 Export", href:"more/reports/export"},
 ], active);
 
-route(/^more\/reports\/overview$/, async () => {
-  const [day, week, month, signals] = await Promise.all([
+/* ── Mes trades — récap perso de mon activité ── */
+route(/^more\/reports\/me$/, async () => {
+  const [day, week, month, signals, byMarket, portfolio] = await Promise.all([
     api("/reports/pnl?period=day"),
     api("/reports/pnl?period=week"),
     api("/reports/pnl?period=month"),
     api("/analytics/signals"),
+    api("/reports/by-market"),
+    api("/analytics/portfolio"),
   ]);
-  const pnlCard = (title, r, period) => `
+  const pnlCard = (title, r) => `
     <div class="card">
       <div class="card-header">
         <div class="h3">${title}</div>
@@ -1149,16 +1175,19 @@ route(/^more\/reports\/overview$/, async () => {
         <div class="stat-mini"><div class="stat-value ${pnlClass(r.best_trade)}">${fmtUsd(r.best_trade)}</div><div class="stat-label">Best</div></div>
       </div>
     </div>`;
-  const maxCount = Math.max(1, ...signals.by_day.map(x => x.count));
+  const maxCount = Math.max(1, ...(signals?.by_day || []).map(x => x.count));
   render(`
     <div class="page-title">Rapports</div>
-    ${reportsNav("more/reports/overview")}
-    ${pnlCard("Aujourd'hui", day, "day")}
-    ${pnlCard("7 derniers jours", week, "week")}
-    ${pnlCard("30 derniers jours", month, "month")}
+    ${reportsNav("more/reports/me")}
+    <div class="small" style="margin-bottom:12px">Performance de <b>vos</b> trades exécutés.</div>
+
+    ${pnlCard("Aujourd'hui", day)}
+    ${pnlCard("7 derniers jours", week)}
+    ${pnlCard("30 derniers jours", month)}
+
     <div class="section">${sectionTitle("Activité par jour (7j)")}
       <div class="card">
-        ${signals.by_day.length === 0
+        ${(signals?.by_day || []).length === 0
           ? `<div class="small" style="text-align:center;padding:20px 0">Aucune activité</div>`
           : signals.by_day.map(x => `
               <div style="margin-bottom:10px">
@@ -1169,20 +1198,51 @@ route(/^more\/reports\/overview$/, async () => {
               </div>`).join("")}
       </div>
     </div>
+
+    ${(portfolio?.by_source || []).length > 0 ? `
+      <div class="section">${sectionTitle("Répartition positions ouvertes")}
+        <div class="card">
+          ${portfolio.by_source.slice(0,10).map(s => `
+            <div style="margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                <span class="mono">${s.source.length > 30 ? s.source.slice(0,10)+'…'+s.source.slice(-4) : s.source}</span>
+                <span>${fmtUsd(s.value)} · ${s.pct}%</span>
+              </div>
+              <div class="progress"><div class="progress-fill" style="width:${s.pct}%"></div></div>
+            </div>`).join("")}
+        </div>
+      </div>` : ""}
+
+    <div class="section">${sectionTitle("PnL par marché")}
+      ${(byMarket?.markets || []).length === 0
+        ? `<div class="card small" style="text-align:center;padding:24px">Aucune donnée</div>`
+        : `<div class="card card-flush"><div class="list">${byMarket.markets.slice(0,15).map(m => `
+            <div class="list-item">
+              <div class="list-icon">📊</div>
+              <div class="list-body">
+                <div class="list-title">${esc(m.market_question)}</div>
+                <div class="list-sub">${m.trade_count} trades · ${fmtUsd(m.volume)}</div>
+              </div>
+              <div class="list-right ${pnlClass(m.pnl)}" style="font-weight:600">${pnlSign(m.pnl)}</div>
+            </div>`).join("")}</div></div>`}
+    </div>
   `);
   setBack("more");
 }, {tab: "more", back: "more"});
 
+/* ── Mes traders — perf des gens que je suis ── */
 route(/^more\/reports\/traders$/, async () => {
   const [byTrader, analytics] = await Promise.all([api("/reports/by-trader"), api("/analytics/traders")]);
-  const traderDetail = (w) => analytics.traders.find(t => t.wallet.toLowerCase() === w.toLowerCase());
+  const traderDetail = (w) => (analytics?.traders || []).find(t => t.wallet.toLowerCase() === w.toLowerCase());
   const catBadge = (c) => c === "hot" ? badge("🔥 HOT", "green")
     : c === "cold" ? badge("❄️ COLD", "red") : c === "warm" ? badge("Actif", "blue") : badge("Nouveau", "muted");
   render(`
     <div class="page-title">Rapports</div>
     ${reportsNav("more/reports/traders")}
-    ${byTrader.traders.length === 0
-      ? emptyState("👥", "Aucune donnée", "Commencez à copier des traders.")
+    <div class="small" style="margin-bottom:12px">Performance détaillée des traders que vous suivez.</div>
+    ${(byTrader?.traders || []).length === 0
+      ? emptyState("👥", "Aucun trader suivi", "Suivez des traders pour voir leur fiche détaillée.",
+          {label:"🔍 Découvrir", onclick:"go('copy/discover')"})
       : byTrader.traders.map(t => {
           const det = traderDetail(t.wallet) || {};
           return `
@@ -1200,90 +1260,37 @@ route(/^more\/reports\/traders$/, async () => {
                 <div class="${pnlClass(t.pnl)}" style="font-weight:700;margin-top:4px">${pnlSign(t.pnl)}</div>
               </div>
             </div>
-            ${det.current_streak && det.current_streak >= 3 ? `<div style="margin-top:6px">${badge((det.streak_type==='win'?'🔥 '+det.current_streak+'W':'❄️ '+det.current_streak+'L'), det.streak_type==='win'?'green':'red')}</div>` : ""}
-            ${det.strong_categories && det.strong_categories.length > 0 ? `<div class="small" style="margin-top:8px"><b>✅ Forts :</b> ${det.strong_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
-            ${det.weak_categories && det.weak_categories.length > 0 ? `<div class="small" style="margin-top:4px"><b>❌ Faibles :</b> ${det.weak_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
-            <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="go('copy/trader/${t.wallet}')">Voir fiche trader ›</button>
+            ${det.current_streak && det.current_streak >= 3 ? `<div style="margin-top:6px">${badge((det.streak_type==='win'?'🔥 '+det.current_streak+' wins consécutifs':'❄️ '+det.current_streak+' losses consécutifs'), det.streak_type==='win'?'green':'red')}</div>` : ""}
+            ${(det.strong_categories || []).length > 0 ? `<div class="small" style="margin-top:8px"><b>✅ Forts :</b> ${det.strong_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
+            ${(det.weak_categories || []).length > 0 ? `<div class="small" style="margin-top:4px"><b>❌ Faibles :</b> ${det.weak_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
+            <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="go('copy/trader/${t.wallet}')">Voir fiche complète ›</button>
           </div>`;
         }).join("")}
   `);
-  setBack("more/reports/overview");
-}, {tab: "more", back: "more/reports/overview"});
+  setBack("more");
+}, {tab: "more", back: "more"});
 
-route(/^more\/reports\/markets$/, async () => {
-  const [byMarket, portfolio] = await Promise.all([api("/reports/by-market"), api("/analytics/portfolio")]);
-  render(`
-    <div class="page-title">Rapports</div>
-    ${reportsNav("more/reports/markets")}
-    ${portfolio.by_source.length > 0 ? `
-      <div class="section">${sectionTitle("Positions ouvertes — répartition")}
-        <div class="card">
-          ${portfolio.by_source.slice(0,10).map(s => `
-            <div style="margin-bottom:12px">
-              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-                <span class="mono">${s.source.length > 30 ? s.source.slice(0,10)+'…'+s.source.slice(-4) : s.source}</span>
-                <span>${fmtUsd(s.value)} · ${s.pct}%</span>
-              </div>
-              <div class="progress"><div class="progress-fill" style="width:${s.pct}%"></div></div>
-            </div>`).join("")}
-        </div>
-      </div>` : ""}
-    <div class="section">${sectionTitle("PnL par marché")}
-      ${byMarket.markets.length === 0
-        ? `<div class="card small" style="text-align:center;padding:24px">Aucune donnée</div>`
-        : `<div class="card card-flush"><div class="list">${byMarket.markets.slice(0,20).map(m => `
-            <div class="list-item">
-              <div class="list-icon">📊</div>
-              <div class="list-body">
-                <div class="list-title">${esc(m.market_question)}</div>
-                <div class="list-sub">${m.trade_count} trades · ${fmtUsd(m.volume)}</div>
-              </div>
-              <div class="list-right ${pnlClass(m.pnl)}" style="font-weight:600">${pnlSign(m.pnl)}</div>
-            </div>`).join("")}</div></div>`}
-    </div>
-  `);
-  setBack("more/reports/overview");
-}, {tab: "more", back: "more/reports/overview"});
-
+/* ── Export PDF/HTML ── */
 route(/^more\/reports\/export$/, async () => {
-  const filters = await api("/analytics/filters");
-  const crit = filters.scoring_criteria || {};
   render(`
     <div class="page-title">Rapports</div>
     ${reportsNav("more/reports/export")}
     <div class="card">
-      <div class="card-title">📄 Exporter un rapport</div>
-      <div class="small" style="margin-bottom:14px">Rapport détaillé HTML avec tables, trades et PnL breakdown. Imprimable en PDF (Ctrl+P).</div>
+      <div class="card-title">📄 Exporter un rapport HTML</div>
+      <div class="small" style="margin-bottom:14px">Rapport détaillé avec tables, trades et PnL breakdown. Imprimable en PDF (Ctrl+P).</div>
       <div class="btn-row cols-3">
         <button class="btn btn-secondary btn-sm" onclick="window._exportReport('day')">📅 Jour</button>
         <button class="btn btn-primary btn-sm" onclick="window._exportReport('week')">📅 7j</button>
         <button class="btn btn-secondary btn-sm" onclick="window._exportReport('month')">📅 30j</button>
       </div>
     </div>
-    <div class="card">
-      <div class="card-title">🎯 Efficacité des filtres</div>
-      <div class="small" style="margin-bottom:12px">État de ton scoring actuel et poids des critères.</div>
-      ${statsGrid([
-        {value: filters.smart_filter_enabled ? "✓" : "✗", label: "Smart filter"},
-        {value: filters.signal_scoring_enabled ? "✓" : "✗", label: "Scoring"},
-        {value: filters.min_signal_score + "/100", label: "Score min"},
-        {value: filters.trades_executed_30d, label: "Trades 30j"},
-      ], 4)}
-      ${Object.keys(crit).length > 0 ? `
-        <div style="margin-top:14px">
-          ${Object.entries(crit).map(([name, c]) => `
-            <div style="margin-bottom:10px">
-              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-                <span>${c.on ? '✓' : '✗'} ${name}</span><span>${c.w || 0}%</span>
-              </div>
-              <div class="progress"><div class="progress-fill" style="width:${c.w||0}%;background:${c.on?'var(--green)':'var(--tg-hint)'}"></div></div>
-            </div>`).join("")}
-        </div>` : ""}
-      <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="go('more/settings')">⚙️ Ajuster</button>
+    <div class="alert info">
+      <h4>ℹ Inclus dans le rapport</h4>
+      <p>• Hero PnL total avec breakdown copy/stratégie<br>• Win rate, best/worst trade<br>• Tableau par trader (top 20)<br>• Tableau par marché (top 20)<br>• Détail des 100 derniers trades</p>
     </div>
   `);
-  setBack("more/reports/overview");
-}, {tab: "more", back: "more/reports/overview"});
+  setBack("more");
+}, {tab: "more", back: "more"});
 
 window._exportReport = function(period) {
   const url = `/miniapp/api/reports/export.html?period=${period}&auth=${encodeURIComponent(APP.initData)}`;
