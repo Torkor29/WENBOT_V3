@@ -147,6 +147,10 @@ class TraderFilterReq(BaseModel):
     wallet: str
     excluded_categories: list[str] = []
 
+class BlacklistReq(BaseModel):
+    market_id: str
+    market_question: Optional[str] = None
+
 
 # Profile presets
 SCORING_PROFILES = {
@@ -1604,6 +1608,48 @@ async def get_trader_filters(user: User = Depends(get_current_user)):
         "global_categories": (s.categories or []) if s else [],
         "global_blacklist": (s.blacklisted_markets or []) if s else [],
     }
+
+
+# ─────────────────────────────────────────────────────────────────
+# BLACKLIST DE MARCHÉS — par utilisateur, global à tous ses traders
+# ─────────────────────────────────────────────────────────────────
+@router.get("/copy/blacklist")
+async def blacklist_get(user: User = Depends(get_current_user)):
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        s = u.settings
+        bl = (s.blacklisted_markets or []) if s else []
+    return {"blacklist": bl, "count": len(bl)}
+
+
+@router.post("/copy/blacklist/add")
+async def blacklist_add(body: BlacklistReq, user: User = Depends(get_current_user)):
+    mkt = (body.market_id or "").strip().lower()
+    if not mkt:
+        raise HTTPException(400, "market_id requis")
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        s = u.settings
+        if not s: raise HTTPException(500, "Settings manquants")
+        bl = list(s.blacklisted_markets or [])
+        if mkt not in [m.lower() for m in bl]:
+            bl.append(mkt)
+        s.blacklisted_markets = bl
+        await session.commit()
+    return {"ok": True, "blacklist": bl, "count": len(bl)}
+
+
+@router.delete("/copy/blacklist/{market_id:path}")
+async def blacklist_remove(market_id: str, user: User = Depends(get_current_user)):
+    mkt = (market_id or "").strip().lower()
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        s = u.settings
+        if not s: raise HTTPException(500, "Settings manquants")
+        bl = [m for m in (s.blacklisted_markets or []) if m.lower() != mkt]
+        s.blacklisted_markets = bl
+        await session.commit()
+    return {"ok": True, "blacklist": bl, "count": len(bl)}
 
 
 @router.post("/settings/trader-filter")

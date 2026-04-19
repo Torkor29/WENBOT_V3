@@ -916,37 +916,52 @@ route(/^copy\/traders\/add$/, async () => {
 
 route(/^copy\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
   const wallet = m[1];
-  const [d, filters] = await Promise.all([
+  const [d, filters, blacklist] = await Promise.all([
     api("/copy/traders/" + wallet + "/stats"),
     cached("trader-filters", () => api("/settings/trader-filters"), 10000),
+    cached("blacklist", () => api("/copy/blacklist"), 10000),
   ]);
   const excluded = (filters.trader_filters || {})[wallet.toLowerCase()]?.excluded_categories || [];
+  const blSet = new Set((blacklist.blacklist || []).map(m => m.toLowerCase()));
+
   render(`
     <div style="text-align:center;padding:16px 0 20px">
       <div class="avatar" style="width:64px;height:64px;font-size:22px;margin:0 auto 10px">${wallet.slice(2,4).toUpperCase()}</div>
       <div class="h2 mono">${shortAddr(wallet)}</div>
-      <div class="small" style="margin-top:2px">${d.trade_count} trades copiés</div>
+      <div class="small" style="margin-top:2px">${d.trade_count} trades copiés par vous</div>
     </div>
+
     ${statsGrid([
       {value: fmtUsd(d.volume), label: "Volume"},
       {value: pnlSign(d.pnl), label: "PnL", cls: pnlClass(d.pnl)},
       {value: d.wins + "/" + d.losses, label: "W/L"},
       {value: fmtPct(d.win_rate), label: "Win rate"},
     ], 4)}
+
+    <!-- Marchés actifs sur Polymarket (live) -->
     <div class="section">
-      ${sectionTitle("Filtres pour ce trader")}
+      ${sectionTitle("📊 Marchés actifs sur Polymarket", {label:"Actualiser", onclick:"window._loadTraderMarkets('"+wallet+"')"})}
+      <div class="small" style="margin-bottom:8px">Positions ouvertes du trader. Bloquez celles que vous ne voulez pas suivre.</div>
+      <div id="trader-markets-card"><div class="loading"><div class="spinner"></div>Chargement marchés…</div></div>
+    </div>
+
+    <!-- Filtre par catégorie -->
+    <div class="section">
+      ${sectionTitle("🏷 Catégories exclues pour ce trader")}
       <div class="card">
-        <div class="small" style="margin-bottom:10px">Catégories exclues uniquement pour ce trader.</div>
+        <div class="small" style="margin-bottom:10px">Plus large que blocage par marché : exclut tous les marchés d'une catégorie.</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">
           ${excluded.length === 0 ? '<span class="small">Aucune exclusion</span>' : excluded.map(c => `<span class="badge badge-red">${esc(c)}</span>`).join("")}
         </div>
-        <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="window._editTraderFilters('${wallet}')">Modifier les filtres</button>
+        <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="window._editTraderFilters('${wallet}')">Modifier les catégories</button>
       </div>
     </div>
+
+    <!-- Derniers trades copiés (depuis ma DB) -->
     <div class="section">
-      ${sectionTitle("Derniers trades")}
+      ${sectionTitle("📜 Derniers trades copiés")}
       ${d.recent_trades.length === 0
-        ? `<div class="card"><div class="small" style="text-align:center;padding:20px 0">Aucun trade</div></div>`
+        ? `<div class="card"><div class="small" style="text-align:center;padding:20px 0">Aucun trade copié de ce trader pour le moment</div></div>`
         : `<div class="card card-flush"><div class="list">${d.recent_trades.map(t => `
             <div class="list-item">
               <div class="list-icon">${t.side==='BUY'?'🟢':'🔴'}</div>
@@ -957,13 +972,82 @@ route(/^copy\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
               <div class="list-right">${t.pnl !== null ? `<span class="${pnlClass(t.pnl)}">${pnlSign(t.pnl)}</span>` : `<span>${fmtUsd(t.amount)}</span>`}</div>
             </div>`).join("")}</div></div>`}
     </div>
+
     <div class="section">
       <div class="card"><div class="addr-box mono" onclick="copy('${wallet}')">${wallet}</div></div>
-      <button class="btn btn-danger" style="margin-top:10px" onclick="window._trUnfollow('${wallet}')">🗑 Ne plus suivre</button>
+      <a class="btn btn-ghost" href="https://polymarket.com/profile/${wallet}" target="_blank" style="margin-top:8px">Voir profil sur Polymarket ↗</a>
+      <button class="btn btn-danger" style="margin-top:8px" onclick="window._trUnfollow('${wallet}')">🗑 Ne plus suivre</button>
     </div>
   `);
   setBack("copy/traders");
+  // Async load markets (Polymarket API can be slow)
+  window._loadTraderMarkets(wallet);
 }, {tab: "copy", back: "copy/traders"});
+
+window._loadTraderMarkets = async function(wallet) {
+  const el = document.getElementById("trader-markets-card");
+  if (!el) return;
+  el.innerHTML = `<div class="loading"><div class="spinner"></div>Chargement marchés…</div>`;
+  try {
+    const [d, blacklist] = await Promise.all([
+      api("/discover/trader/" + wallet + "/markets"),
+      api("/copy/blacklist"),
+    ]);
+    const blSet = new Set((blacklist.blacklist || []).map(m => m.toLowerCase()));
+
+    if (d.error) {
+      el.innerHTML = `<div class="card"><div class="small">⚠ ${esc(d.error)}</div></div>`;
+      return;
+    }
+    if (!d.markets || d.markets.length === 0) {
+      el.innerHTML = `<div class="card"><div class="small" style="text-align:center;padding:16px 0">Ce trader n'a aucune position ouverte sur Polymarket actuellement.</div></div>`;
+      return;
+    }
+
+    el.innerHTML = `<div class="card card-flush"><div class="list">${d.markets.map(mk => {
+      const mid = (mk.market_id || mk.market_question || "").toLowerCase();
+      const isBlocked = blSet.has(mid);
+      return `
+        <div class="list-item">
+          <div class="list-icon">${mk.pnl > 0 ? '🟢' : mk.pnl < 0 ? '🔴' : '⚪'}</div>
+          <div class="list-body">
+            <div class="list-title">${esc(mk.market_question)}</div>
+            <div class="list-sub">${esc(mk.outcome)} @ ${mk.entry_price?.toFixed(4) || '?'} → ${mk.current_price?.toFixed(4) || '?'} · ${fmtUsd(mk.current_value || 0)}</div>
+          </div>
+          <div class="list-right">
+            ${isBlocked
+              ? `<button class="btn btn-secondary btn-sm" onclick="window._unblockMarket('${mid}', '${wallet}')">✓ Débloquer</button>`
+              : `<button class="btn btn-danger btn-sm" onclick="window._blockMarket('${mid}', '${esc(mk.market_question||'')}', '${wallet}')">🚫 Bloquer</button>`}
+          </div>
+        </div>`;
+    }).join("")}</div></div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="card"><div class="small">⚠ ${esc(e.message)}</div></div>`;
+  }
+};
+
+window._blockMarket = async function(marketId, marketQuestion, wallet) {
+  if (!marketId) return toast("ID marché invalide", "error");
+  const ok = await confirmModal("Bloquer ce marché ?",
+    `"${marketQuestion.slice(0, 80)}"\n\nLe bot ne copiera AUCUN trade sur ce marché, peu importe le trader.`,
+    "Bloquer", "danger");
+  if (!ok) return;
+  try {
+    await api("/copy/blacklist/add", {method:"POST", body:{market_id: marketId, market_question: marketQuestion}});
+    invalidate("blacklist");
+    toast("Marché bloqué ✓");
+    window._loadTraderMarkets(wallet);
+  } catch (e) { toast(e.message, "error"); }
+};
+
+window._unblockMarket = async function(marketId, wallet) {
+  try {
+    await api("/copy/blacklist/" + encodeURIComponent(marketId), {method:"DELETE"});
+    invalidate("blacklist");
+    toast("Marché débloqué");
+    window._loadTraderMarkets(wallet);
+  } catch (e) { toast(e.message, "error"); }
+};
 
 window._trUnfollow = async function(wallet) {
   const ok = await confirmModal("Arrêter de suivre ?", shortAddr(wallet), "Retirer", "danger");
@@ -1158,6 +1242,11 @@ route(/^more$/, async () => {
       <div class="list-item" onclick="go('more/notifs-tg')">
         <div class="list-icon">🔔</div>
         <div class="list-body"><div class="list-title">Notifications Telegram</div><div class="list-sub">Destination + filtres événements</div></div>
+        <div class="list-chevron">›</div>
+      </div>
+      <div class="list-item" onclick="go('more/blacklist')">
+        <div class="list-icon">🚫</div>
+        <div class="list-body"><div class="list-title">Marchés bloqués</div><div class="list-sub">Gérer la liste des marchés à ne jamais copier</div></div>
         <div class="list-chevron">›</div>
       </div>
       <div class="list-item" onclick="go('more/reports')">
@@ -1601,6 +1690,35 @@ window._exportReport = function(period) {
   if (tg?.openLink) tg.openLink(fullUrl);
   else window.open(fullUrl, "_blank");
   toast("Rapport ouvert ↗");
+};
+
+/* ═══════════════════════════════════════════════════ MARCHÉS BLOQUÉS (blacklist global) */
+route(/^more\/blacklist$/, async () => {
+  const r = await api("/copy/blacklist");
+  render(`
+    <div class="page-title">🚫 Marchés bloqués</div>
+    <div class="small" style="margin-bottom:14px">Le bot ne copiera <b>aucun trade</b> sur ces marchés, peu importe le trader.</div>
+    ${r.count === 0
+      ? emptyState("✓", "Aucun marché bloqué", "Vous pouvez bloquer un marché depuis la fiche d'un trader (dans la section Marchés actifs).")
+      : `<div class="card card-flush"><div class="list">${r.blacklist.map(mid => `
+          <div class="list-item">
+            <div class="list-icon" style="background:rgba(255,69,58,0.15)">🚫</div>
+            <div class="list-body">
+              <div class="list-title mono" style="word-break:break-all">${esc(mid).slice(0, 60)}${mid.length>60?'…':''}</div>
+            </div>
+            <div class="list-right">
+              <button class="btn btn-secondary btn-sm" onclick="window._unblockGlobal('${esc(mid)}')">Débloquer</button>
+            </div>
+          </div>`).join("")}</div></div>`}
+  `);
+  setBack("more");
+}, {tab: "more", back: "more"});
+
+window._unblockGlobal = async function(mid) {
+  try {
+    await api("/copy/blacklist/" + encodeURIComponent(mid), {method:"DELETE"});
+    invalidate("blacklist"); toast("Débloqué"); dispatch();
+  } catch (e) { toast(e.message, "error"); }
 };
 
 /* ═══════════════════════════════════════════════════ NOTIFS — Mini App feed */
