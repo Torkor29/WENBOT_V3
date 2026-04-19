@@ -156,6 +156,30 @@ class CopyTradeEngine:
                 user_settings = await get_or_create_settings(session, user)
 
                 # ══════════════════════════════════════════════
+                # IDEMPOTENCY GATE: skip if same (user, market, token, side)
+                # already processed in last 5 minutes (anti-replay safety)
+                # ══════════════════════════════════════════════
+                from datetime import datetime as _dt, timedelta as _td
+                from sqlalchemy import select as _sel, func as _func
+                from bot.models.trade import Trade as _Trade
+                _cutoff = _dt.utcnow() - _td(minutes=5)
+                _existing = await session.scalar(
+                    _sel(_func.count(_Trade.id)).where(
+                        _Trade.user_id == user.id,
+                        _Trade.market_id == signal.market_id,
+                        _Trade.token_id == signal.token_id,
+                        _Trade.side == TradeSide.BUY if signal.side.upper() == "BUY" else TradeSide.SELL,
+                        _Trade.created_at >= _cutoff,
+                    )
+                )
+                if _existing and _existing > 0:
+                    logger.info(
+                        f"[{tg_id}] 🔁 Idempotent skip: same trade already processed "
+                        f"in last 5 min (market={signal.market_id[:12]}..., side={signal.side})"
+                    )
+                    return
+
+                # ══════════════════════════════════════════════
                 # SAFETY GATE: triple-check before allowing live trades
                 # ══════════════════════════════════════════════
                 is_paper = user.paper_trading  # snapshot for entire flow

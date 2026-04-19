@@ -312,6 +312,12 @@ route(/^wallet\/copy$/, async () => {
       <button class="btn btn-primary" onclick="go('wallet/copy/deposit')">📥 Déposer</button>
       <button class="btn btn-secondary" onclick="go('wallet/copy/withdraw')">📤 Retirer</button>
     </div>
+
+    <div class="section">
+      ${sectionTitle("💰 Réclamer mes gains")}
+      <div id="redeem-card"></div>
+    </div>
+
     <div class="section">
       ${sectionTitle("Avancé")}
       <div class="card card-flush"><div class="list">
@@ -328,7 +334,44 @@ route(/^wallet\/copy$/, async () => {
       </div></div>
     </div>
   `);
+  // Async load (so the wallet page renders fast)
+  loadRedeemCard();
 }, {tab: "wallet"});
+
+async function loadRedeemCard() {
+  const el = document.getElementById("redeem-card");
+  if (!el) return;
+  try {
+    const r = await api("/positions/redeemable");
+    if (!r.items || r.items.length === 0) {
+      el.innerHTML = `<div class="card"><div class="small" style="text-align:center;padding:8px 0">✓ Aucun gain en attente. Tous vos USDC ont été perçus.</div></div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="alert info">
+        <h4>🎉 ${r.count} position(s) gagnante(s) à réclamer</h4>
+        <p>Total estimé : <b>${fmtUsd(r.total_expected_usdc)}</b>. Sur Polymarket, cliquez "Redeem" pour récupérer ces USDC dans votre wallet.</p>
+      </div>
+      <a class="btn btn-primary" href="${r.polymarket_portfolio_url}" target="_blank" style="margin-bottom:10px">🌐 Réclamer sur Polymarket ↗</a>
+      <div class="card card-flush"><div class="list">
+        ${r.items.slice(0, 10).map(it => `
+          <div class="list-item">
+            <div class="list-icon" style="background:rgba(52,199,89,0.15)">🎉</div>
+            <div class="list-body">
+              <div class="list-title">${esc(it.market_question)}</div>
+              <div class="list-sub">${it.shares.toFixed(2)} sh · résultat ${esc(it.outcome)} · gain ${fmtUsd(it.expected_payout)}</div>
+            </div>
+            <div class="list-right pnl-pos" style="font-weight:600">${pnlSign(it.pnl)}</div>
+          </div>`).join("")}
+      </div></div>
+      <div class="alert warning" style="margin-top:10px">
+        <h4>⚙️ Note technique</h4>
+        <p>Le redeem on-chain (appel <code>redeemPositions</code> sur le contrat Conditional Tokens) n'est pas encore automatisé. Cliquez le bouton ci-dessus, Polymarket vous fait redeemer en 2 clics — ça prend 10 sec.</p>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="card"><div class="small">Impossible de charger les gains à réclamer (${esc(e.message)})</div></div>`;
+  }
+}
 
 /* ── Wallet STRATÉGIE ── */
 route(/^wallet\/strategy$/, async () => {
@@ -363,31 +406,151 @@ route(/^wallet\/strategy$/, async () => {
     };
     return;
   }
-  const bal = await api("/strategy-wallet/balance").catch(() => ({usdc:0, matic:0, address:me.strategy_wallet_address}));
+  const bal = await api("/strategy-wallet/balance").catch(() => ({usdc:0, matic:0, address:me.strategy_wallet_address, usdc_error:"Erreur réseau"}));
+  const rpcErr = bal.usdc_error || bal.matic_error;
   render(`
     <div class="page-title">Wallet</div>
     ${walletNav("wallet/strategy")}
-    <div class="hero">
-      <div class="hero-value">${fmtUsd(bal.usdc)}</div>
-      <div class="hero-label">USDC · wallet stratégie</div>
-      <div class="small" style="margin-top:8px">${bal.matic.toFixed(4)} MATIC</div>
-    </div>
+
     <div class="card">
-      <div class="tiny" style="margin-bottom:8px">Adresse</div>
+      <div class="card-title">🎯 Solde wallet stratégie</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="balance-cell is-active">
+          <div class="tiny">💵 USDC</div>
+          <div style="font-size:24px;font-weight:700">${fmtUsd(bal.usdc)}</div>
+          <div class="small">disponible pour stratégies</div>
+        </div>
+        <div class="balance-cell">
+          <div class="tiny">⛽ MATIC</div>
+          <div style="font-size:24px;font-weight:700">${bal.matic.toFixed(4)}</div>
+          <div class="small">gas Polygon</div>
+        </div>
+      </div>
+      ${rpcErr ? `<div class="small" style="color:var(--orange);margin-top:6px">⚠ ${esc(rpcErr)}</div>` : ""}
+    </div>
+
+    <div class="card">
+      <div class="tiny" style="margin-bottom:8px">Adresse Polygon (recevez USDC ici)</div>
       <div class="addr-box mono" onclick="copy('${bal.address}')">${bal.address}</div>
     </div>
-    <div class="alert info">
-      <h4>ℹ À savoir</h4>
-      <p>Ce wallet exécute les stratégies automatisées. Approvisionnez-le en USDC.e + MATIC comme un wallet normal.</p>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="go('wallet/strategy/deposit')">📥 Déposer</button>
+      <button class="btn btn-secondary" onclick="go('wallet/strategy/withdraw')">📤 Retirer</button>
     </div>
-    <button class="btn btn-danger" id="sw-del">🗑 Supprimer ce wallet</button>
+
+    <div class="section">
+      ${sectionTitle("Avancé")}
+      <div class="card card-flush"><div class="list">
+        <div class="list-item" onclick="go('wallet/strategy/export')">
+          <div class="list-icon">🔐</div>
+          <div class="list-body"><div class="list-title">Exporter la clé privée</div></div>
+          <div class="list-chevron">›</div>
+        </div>
+        <div class="list-item" onclick="window._walletDelete('strategy')">
+          <div class="list-icon" style="background:rgba(255,69,58,0.15)">🗑</div>
+          <div class="list-body"><div class="list-title" style="color:var(--red)">Supprimer ce wallet</div></div>
+          <div class="list-chevron">›</div>
+        </div>
+      </div></div>
+    </div>
   `);
-  document.getElementById("sw-del").onclick = async () => {
-    const ok = await confirmModal("Supprimer ?", "La clé sera effacée.", "Supprimer", "danger");
-    if (!ok) return;
-    await api("/strategy-wallet", {method:"DELETE"}); invalidateAll(); await loadUser(); toast("Supprimé"); go("wallet/strategy");
-  };
 }, {tab: "wallet"});
+
+route(/^wallet\/strategy\/deposit$/, async () => {
+  const me = APP.user;
+  render(`
+    <div class="page-title">Déposer (Stratégie)</div>
+    <div class="alert info">
+      <h4>ℹ Instructions</h4>
+      <p>• Réseau : <b>Polygon</b><br>• Token : <b>USDC.e</b><br>• Ajoutez du <b>MATIC</b> (0.1) pour le gas<br>• Crédité ~3 sec</p>
+    </div>
+    <div class="card">
+      <div class="tiny" style="margin-bottom:8px">Adresse de dépôt — wallet stratégie</div>
+      <div class="addr-box mono" onclick="copy('${me.strategy_wallet_address}')">${me.strategy_wallet_address}</div>
+      <button class="btn btn-primary" style="margin-top:12px" onclick="copy('${me.strategy_wallet_address}')">📋 Copier l'adresse</button>
+    </div>
+  `);
+  setBack("wallet/strategy");
+}, {tab: "wallet", back: "wallet/strategy"});
+
+route(/^wallet\/strategy\/withdraw$/, async () => {
+  const bal = await api("/strategy-wallet/balance");
+  render(`
+    <div class="page-title">Retirer (Stratégie)</div>
+    <div class="hero" style="padding:20px"><div class="hero-value">${fmtUsd(bal.usdc)}</div><div class="hero-label">Disponible · wallet stratégie</div></div>
+    <div class="card">
+      <div class="form-row">
+        <label class="label">Adresse destination</label>
+        <input class="input input-mono" id="to-addr" placeholder="0x..." autocomplete="off" autocapitalize="off" />
+      </div>
+      <div class="form-row">
+        <label class="label">Montant USDC</label>
+        <div class="input-with-max">
+          <input class="input" id="amount" type="number" step="0.01" placeholder="0.00" />
+          <button class="input-max-btn" onclick="document.getElementById('amount').value=${bal.usdc}">MAX</button>
+        </div>
+      </div>
+    </div>
+    <div class="alert warning">
+      <p>Le retrait sort des fonds depuis le wallet stratégie (différent du copy wallet).</p>
+    </div>
+  `);
+  setBack("wallet/strategy");
+  setMainBtn("ENVOYER", async () => {
+    const to = document.getElementById("to-addr").value.trim();
+    const amt = parseFloat(document.getElementById("amount").value);
+    if (!to.startsWith("0x") || to.length !== 42) return toast("Adresse invalide", "error");
+    if (!amt || amt <= 0) return toast("Montant invalide", "error");
+    if (amt > bal.usdc) return toast("Solde insuffisant", "error");
+    const ok = await confirmModal("Confirmer retrait", `Envoyer ${fmtUsd(amt)} USDC depuis le wallet STRATÉGIE à ${shortAddr(to)} ?\nIrréversible.`, "Envoyer");
+    if (!ok) return;
+    try {
+      clearMainBtn(); toast("Transaction en cours…");
+      const r = await api("/strategy-wallet/withdraw", {method:"POST", body:{to_address: to, amount: amt}});
+      invalidateAll();
+      render(`
+        <div class="empty" style="padding:40px 20px"><div class="empty-icon">✅</div><div class="empty-title" style="color:var(--green)">Retrait envoyé</div></div>
+        <div class="card">
+          <div class="tiny" style="margin-bottom:8px">Transaction hash</div>
+          <div class="addr-box mono" onclick="copy('${r.tx_hash}')">${r.tx_hash}</div>
+          <a class="btn btn-secondary" href="https://polygonscan.com/tx/${r.tx_hash}" target="_blank" style="margin-top:12px">Voir sur Polygonscan ↗</a>
+        </div>
+        <button class="btn btn-primary" onclick="go('wallet/strategy')">Retour</button>
+      `);
+      setBack("wallet/strategy");
+    } catch (e) { toast(e.message, "error"); }
+  });
+}, {tab: "wallet", back: "wallet/strategy"});
+
+route(/^wallet\/strategy\/export$/, async () => {
+  render(`
+    <div class="page-title">Exporter clé stratégie</div>
+    <div class="alert"><h4>🔐 Zone dangereuse</h4><p>Contrôle <b>total</b> du wallet stratégie. Ne partagez JAMAIS.</p></div>
+    <div class="card">
+      <label class="toggle-row"><div class="toggle-label">Je comprends les risques</div><div class="toggle"><input type="checkbox" id="c1"><span class="slider"></span></div></label>
+      <label class="toggle-row"><div class="toggle-label">Je ne suis pas en public</div><div class="toggle"><input type="checkbox" id="c2"><span class="slider"></span></div></label>
+    </div>
+    <button class="btn btn-danger" id="exp-btn">Afficher la clé</button>
+  `);
+  setBack("wallet/strategy");
+  document.getElementById("exp-btn").onclick = async () => {
+    if (!document.getElementById("c1").checked || !document.getElementById("c2").checked) return toast("Cochez les deux cases", "error");
+    try {
+      const r = await api("/strategy-wallet/export-pk", {method:"POST", body:{confirm: true}});
+      render(`
+        <div class="page-title">🔐 Clé privée stratégie</div>
+        <div class="alert"><h4>⚠ Copiez maintenant</h4></div>
+        <div class="card">
+          <div class="addr-box mono" style="color:var(--red);background:rgba(255,69,58,0.08)">${r.private_key}</div>
+          <button class="btn btn-primary" style="margin-top:12px" onclick="copy('${r.private_key}')">📋 Copier</button>
+        </div>
+        <button class="btn btn-secondary" onclick="go('wallet/strategy')">Terminé</button>
+      `);
+      setBack("wallet/strategy");
+    } catch (e) { toast(e.message, "error"); }
+  };
+}, {tab: "wallet", back: "wallet/strategy"});
 
 /* ── Wallet Copy sub-routes ── */
 window._walletDelete = async function(which) {
@@ -1187,136 +1350,239 @@ const reportsNav = (active) => subNav([
   {label:"📄 Export", href:"more/reports/export"},
 ], active);
 
-/* ── Mes trades — récap perso de mon activité ── */
+/* État local rapports */
+const REPORTS_STATE = { my_period: "week", traders_period: "month", traders_selected: new Set() };
+
+/* ── Mes trades — sélecteur période + Générer ── */
 route(/^more\/reports\/me$/, async () => {
-  const [day, week, month, signals, byMarket, portfolio] = await Promise.all([
-    api("/reports/pnl?period=day"),
-    api("/reports/pnl?period=week"),
-    api("/reports/pnl?period=month"),
-    api("/analytics/signals"),
-    api("/reports/by-market"),
-    api("/analytics/portfolio"),
-  ]);
-  const pnlCard = (title, r) => `
-    <div class="card">
-      <div class="card-header">
-        <div class="h3">${title}</div>
-        <span class="${pnlClass(r.pnl)}" style="font-weight:700;font-size:18px">${pnlSign(r.pnl)}</span>
-      </div>
-      <div class="stats-inline">
-        <div class="stat-mini"><div class="stat-value">${r.trades}</div><div class="stat-label">Trades</div></div>
-        <div class="stat-mini"><div class="stat-value">${fmtPct(r.win_rate)}</div><div class="stat-label">Win rate</div></div>
-        <div class="stat-mini"><div class="stat-value ${pnlClass(r.best_trade)}">${fmtUsd(r.best_trade)}</div><div class="stat-label">Best</div></div>
-      </div>
-    </div>`;
-  const maxCount = Math.max(1, ...(signals?.by_day || []).map(x => x.count));
   render(`
     <div class="page-title">Rapports</div>
     ${reportsNav("more/reports/me")}
     <div class="small" style="margin-bottom:12px">Performance de <b>vos</b> trades exécutés.</div>
 
-    ${pnlCard("Aujourd'hui", day)}
-    ${pnlCard("7 derniers jours", week)}
-    ${pnlCard("30 derniers jours", month)}
-
-    <div class="section">${sectionTitle("Activité par jour (7j)")}
-      <div class="card">
-        ${(signals?.by_day || []).length === 0
-          ? `<div class="small" style="text-align:center;padding:20px 0">Aucune activité</div>`
-          : signals.by_day.map(x => `
-              <div style="margin-bottom:10px">
-                <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-                  <span>${x.date}</span><span>${x.count} trades</span>
-                </div>
-                <div class="progress"><div class="progress-fill" style="width:${(x.count/maxCount)*100}%;background:var(--tg-btn)"></div></div>
-              </div>`).join("")}
+    <div class="card">
+      <div class="card-title">📅 Choisir la période</div>
+      <div class="form-row">
+        <select class="input" id="my-period">
+          <option value="day" ${REPORTS_STATE.my_period==='day'?'selected':''}>Aujourd'hui</option>
+          <option value="week" ${REPORTS_STATE.my_period==='week'?'selected':''}>7 derniers jours</option>
+          <option value="month" ${REPORTS_STATE.my_period==='month'?'selected':''}>30 derniers jours</option>
+        </select>
       </div>
+      <button class="btn btn-primary" id="gen-my">📊 Générer le rapport</button>
     </div>
 
-    ${(portfolio?.by_source || []).length > 0 ? `
-      <div class="section">${sectionTitle("Répartition positions ouvertes")}
-        <div class="card">
-          ${portfolio.by_source.slice(0,10).map(s => `
-            <div style="margin-bottom:12px">
-              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-                <span class="mono">${s.source.length > 30 ? s.source.slice(0,10)+'…'+s.source.slice(-4) : s.source}</span>
-                <span>${fmtUsd(s.value)} · ${s.pct}%</span>
-              </div>
-              <div class="progress"><div class="progress-fill" style="width:${s.pct}%"></div></div>
-            </div>`).join("")}
-        </div>
-      </div>` : ""}
-
-    <div class="section">${sectionTitle("PnL par marché")}
-      ${(byMarket?.markets || []).length === 0
-        ? `<div class="card small" style="text-align:center;padding:24px">Aucune donnée</div>`
-        : `<div class="card card-flush"><div class="list">${byMarket.markets.slice(0,15).map(m => `
-            <div class="list-item">
-              <div class="list-icon">📊</div>
-              <div class="list-body">
-                <div class="list-title">${esc(m.market_question)}</div>
-                <div class="list-sub">${m.trade_count} trades · ${fmtUsd(m.volume)}</div>
-              </div>
-              <div class="list-right ${pnlClass(m.pnl)}" style="font-weight:600">${pnlSign(m.pnl)}</div>
-            </div>`).join("")}</div></div>`}
-    </div>
+    <div id="my-result"></div>
   `);
   setBack("more");
+  document.getElementById("gen-my").onclick = async () => {
+    const period = document.getElementById("my-period").value;
+    REPORTS_STATE.my_period = period;
+    const out = document.getElementById("my-result");
+    out.innerHTML = `<div class="loading"><div class="spinner"></div>Génération…</div>`;
+    try {
+      const [pnl, signals, byMarket, portfolio] = await Promise.all([
+        api("/reports/pnl?period=" + period),
+        api("/analytics/signals"),
+        api("/reports/by-market"),
+        api("/analytics/portfolio"),
+      ]);
+      const periodLabel = period==='day'?"Aujourd'hui":period==='week'?"7 derniers jours":"30 derniers jours";
+      const maxCount = Math.max(1, ...(signals?.by_day || []).map(x => x.count));
+      out.innerHTML = `
+        <div class="card">
+          <div class="card-header">
+            <div class="h3">${periodLabel}</div>
+            <span class="${pnlClass(pnl.pnl)}" style="font-weight:700;font-size:20px">${pnlSign(pnl.pnl)}</span>
+          </div>
+          <div class="stats-inline">
+            <div class="stat-mini"><div class="stat-value">${pnl.trades}</div><div class="stat-label">Trades</div></div>
+            <div class="stat-mini"><div class="stat-value">${fmtPct(pnl.win_rate)}</div><div class="stat-label">Win rate</div></div>
+            <div class="stat-mini"><div class="stat-value ${pnlClass(pnl.best_trade)}">${fmtUsd(pnl.best_trade)}</div><div class="stat-label">Best</div></div>
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="window._exportReport('${period}')" style="margin-bottom:16px">📄 Exporter HTML/PDF</button>
+
+        <div class="section">${sectionTitle("Activité par jour (7j)")}
+          <div class="card">
+            ${(signals?.by_day || []).length === 0
+              ? `<div class="small" style="text-align:center;padding:20px 0">Aucune activité</div>`
+              : signals.by_day.map(x => `
+                  <div style="margin-bottom:10px">
+                    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                      <span>${x.date}</span><span>${x.count} trades</span>
+                    </div>
+                    <div class="progress"><div class="progress-fill" style="width:${(x.count/maxCount)*100}%;background:var(--tg-btn)"></div></div>
+                  </div>`).join("")}
+          </div>
+        </div>
+
+        ${(portfolio?.by_source || []).length > 0 ? `
+          <div class="section">${sectionTitle("Répartition positions ouvertes")}
+            <div class="card">
+              ${portfolio.by_source.slice(0,10).map(s => `
+                <div style="margin-bottom:12px">
+                  <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                    <span class="mono">${s.source.length > 30 ? s.source.slice(0,10)+'…'+s.source.slice(-4) : s.source}</span>
+                    <span>${fmtUsd(s.value)} · ${s.pct}%</span>
+                  </div>
+                  <div class="progress"><div class="progress-fill" style="width:${s.pct}%"></div></div>
+                </div>`).join("")}
+            </div>
+          </div>` : ""}
+
+        <div class="section">${sectionTitle("PnL par marché")}
+          ${(byMarket?.markets || []).length === 0
+            ? `<div class="card small" style="text-align:center;padding:24px">Aucune donnée</div>`
+            : `<div class="card card-flush"><div class="list">${byMarket.markets.slice(0,15).map(m => `
+                <div class="list-item">
+                  <div class="list-icon">📊</div>
+                  <div class="list-body">
+                    <div class="list-title">${esc(m.market_question)}</div>
+                    <div class="list-sub">${m.trade_count} trades · ${fmtUsd(m.volume)}</div>
+                  </div>
+                  <div class="list-right ${pnlClass(m.pnl)}" style="font-weight:600">${pnlSign(m.pnl)}</div>
+                </div>`).join("")}</div></div>`}
+        </div>
+      `;
+    } catch (e) {
+      out.innerHTML = `<div class="alert"><p>Erreur: ${esc(e.message)}</p></div>`;
+    }
+  };
 }, {tab: "more", back: "more"});
 
-/* ── Mes traders — perf des gens que je suis ── */
+/* ── Mes traders — sélecteur traders + période + Générer ── */
 route(/^more\/reports\/traders$/, async () => {
-  const [byTrader, analytics] = await Promise.all([api("/reports/by-trader"), api("/analytics/traders")]);
-  const traderDetail = (w) => (analytics?.traders || []).find(t => t.wallet.toLowerCase() === w.toLowerCase());
-  const catBadge = (c) => c === "hot" ? badge("🔥 HOT", "green")
-    : c === "cold" ? badge("❄️ COLD", "red") : c === "warm" ? badge("Actif", "blue") : badge("Nouveau", "muted");
+  const traders = await api("/copy/traders");
+  if (REPORTS_STATE.traders_selected.size === 0) {
+    traders.traders.forEach(t => REPORTS_STATE.traders_selected.add(t.wallet.toLowerCase()));
+  }
   render(`
     <div class="page-title">Rapports</div>
     ${reportsNav("more/reports/traders")}
-    <div class="small" style="margin-bottom:12px">Performance détaillée des traders que vous suivez.</div>
-    ${(byTrader?.traders || []).length === 0
-      ? emptyState("👥", "Aucun trader suivi", "Suivez des traders pour voir leur fiche détaillée.",
-          {label:"🔍 Découvrir", onclick:"go('copy/discover')"})
-      : byTrader.traders.map(t => {
-          const det = traderDetail(t.wallet) || {};
-          return `
-          <div class="card">
-            <div class="card-header">
-              <div style="display:flex;align-items:center;gap:10px">
-                <div class="avatar" style="width:36px;height:36px;font-size:14px">${t.wallet_short.slice(2,4).toUpperCase()}</div>
-                <div>
-                  <div class="mono" style="font-weight:600">${t.wallet_short}</div>
-                  <div class="small">${t.trade_count} trades · ${fmtUsd(t.volume)}</div>
-                </div>
+    <div class="small" style="margin-bottom:12px">Performance détaillée des traders sélectionnés.</div>
+
+    <div class="card">
+      <div class="card-title">🎯 Sélectionner les traders</div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <button class="btn btn-ghost btn-sm" onclick="window._traderSelectAll()">Tout cocher</button>
+        <button class="btn btn-ghost btn-sm" onclick="window._traderSelectNone()">Tout décocher</button>
+      </div>
+      ${traders.traders.length === 0
+        ? `<div class="small" style="text-align:center;padding:20px 0">Aucun trader suivi</div>`
+        : traders.traders.map(t => `
+            <label class="toggle-row" style="cursor:pointer">
+              <div>
+                <div class="toggle-label mono">${t.wallet_short}</div>
+                <div class="toggle-sub">${t.trade_count} trades · ${pnlSign(t.pnl)} PnL</div>
               </div>
-              <div style="text-align:right">
-                ${det.category ? catBadge(det.category) : ""}
-                <div class="${pnlClass(t.pnl)}" style="font-weight:700;margin-top:4px">${pnlSign(t.pnl)}</div>
-              </div>
-            </div>
-            ${det.current_streak && det.current_streak >= 3 ? `<div style="margin-top:6px">${badge((det.streak_type==='win'?'🔥 '+det.current_streak+' wins consécutifs':'❄️ '+det.current_streak+' losses consécutifs'), det.streak_type==='win'?'green':'red')}</div>` : ""}
-            ${(det.strong_categories || []).length > 0 ? `<div class="small" style="margin-top:8px"><b>✅ Forts :</b> ${det.strong_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
-            ${(det.weak_categories || []).length > 0 ? `<div class="small" style="margin-top:4px"><b>❌ Faibles :</b> ${det.weak_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
-            <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="go('copy/trader/${t.wallet}')">Voir fiche complète ›</button>
-          </div>`;
-        }).join("")}
+              <div class="toggle"><input type="checkbox" data-trader="${t.wallet.toLowerCase()}" ${REPORTS_STATE.traders_selected.has(t.wallet.toLowerCase())?'checked':''}><span class="slider"></span></div>
+            </label>`).join("")}
+
+      <div class="form-row" style="margin-top:14px">
+        <label class="label">Période</label>
+        <select class="input" id="tr-period">
+          <option value="week" ${REPORTS_STATE.traders_period==='week'?'selected':''}>7 derniers jours</option>
+          <option value="month" ${REPORTS_STATE.traders_period==='month'?'selected':''}>30 derniers jours</option>
+        </select>
+      </div>
+
+      <button class="btn btn-primary" id="gen-tr">📊 Générer le rapport</button>
+    </div>
+
+    <div id="tr-result"></div>
   `);
   setBack("more");
+
+  document.querySelectorAll("[data-trader]").forEach(el => {
+    el.addEventListener("change", () => {
+      const w = el.dataset.trader;
+      if (el.checked) REPORTS_STATE.traders_selected.add(w);
+      else REPORTS_STATE.traders_selected.delete(w);
+    });
+  });
+
+  document.getElementById("gen-tr").onclick = async () => {
+    REPORTS_STATE.traders_period = document.getElementById("tr-period").value;
+    const selected = REPORTS_STATE.traders_selected;
+    if (selected.size === 0) return toast("Sélectionnez au moins un trader", "error");
+
+    const out = document.getElementById("tr-result");
+    out.innerHTML = `<div class="loading"><div class="spinner"></div>Génération…</div>`;
+    try {
+      const [byTrader, analytics] = await Promise.all([
+        api("/reports/by-trader"),
+        api("/analytics/traders"),
+      ]);
+      const traderDetail = (w) => (analytics?.traders || []).find(t => t.wallet.toLowerCase() === w.toLowerCase());
+      const catBadge = (c) => c === "hot" ? badge("🔥 HOT", "green")
+        : c === "cold" ? badge("❄️ COLD", "red") : c === "warm" ? badge("Actif", "blue") : badge("Nouveau", "muted");
+      const filtered = (byTrader.traders || []).filter(t => selected.has(t.wallet.toLowerCase()));
+
+      out.innerHTML = `
+        <div class="small" style="margin:12px 0">${filtered.length} trader(s) · période ${REPORTS_STATE.traders_period==='week'?'7j':'30j'}</div>
+        ${filtered.length === 0
+          ? emptyState("📭", "Aucune donnée", "Aucun des traders sélectionnés n'a de trade dans la période.")
+          : filtered.map(t => {
+              const det = traderDetail(t.wallet) || {};
+              return `
+              <div class="card">
+                <div class="card-header">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div class="avatar" style="width:36px;height:36px;font-size:14px">${t.wallet_short.slice(2,4).toUpperCase()}</div>
+                    <div>
+                      <div class="mono" style="font-weight:600">${t.wallet_short}</div>
+                      <div class="small">${t.trade_count} trades · ${fmtUsd(t.volume)}</div>
+                    </div>
+                  </div>
+                  <div style="text-align:right">
+                    ${det.category ? catBadge(det.category) : ""}
+                    <div class="${pnlClass(t.pnl)}" style="font-weight:700;margin-top:4px">${pnlSign(t.pnl)}</div>
+                  </div>
+                </div>
+                ${det.current_streak && det.current_streak >= 3 ? `<div style="margin-top:6px">${badge((det.streak_type==='win'?'🔥 '+det.current_streak+' wins consécutifs':'❄️ '+det.current_streak+' losses consécutifs'), det.streak_type==='win'?'green':'red')}</div>` : ""}
+                ${(det.strong_categories || []).length > 0 ? `<div class="small" style="margin-top:8px"><b>✅ Forts :</b> ${det.strong_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
+                ${(det.weak_categories || []).length > 0 ? `<div class="small" style="margin-top:4px"><b>❌ Faibles :</b> ${det.weak_categories.map(c => `${c.category} (${fmtPct(c.win_rate)})`).join(", ")}</div>` : ""}
+                <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="go('copy/trader/${t.wallet}')">Voir fiche complète ›</button>
+              </div>`;
+            }).join("")}
+      `;
+    } catch (e) {
+      out.innerHTML = `<div class="alert"><p>Erreur: ${esc(e.message)}</p></div>`;
+    }
+  };
 }, {tab: "more", back: "more"});
 
-/* ── Export PDF/HTML ── */
+window._traderSelectAll = function() {
+  document.querySelectorAll("[data-trader]").forEach(el => {
+    el.checked = true;
+    REPORTS_STATE.traders_selected.add(el.dataset.trader);
+  });
+};
+window._traderSelectNone = function() {
+  document.querySelectorAll("[data-trader]").forEach(el => {
+    el.checked = false;
+  });
+  REPORTS_STATE.traders_selected.clear();
+};
+
+/* ── Export PDF/HTML — sélecteur période + bouton Générer ── */
 route(/^more\/reports\/export$/, async () => {
   render(`
     <div class="page-title">Rapports</div>
     ${reportsNav("more/reports/export")}
     <div class="card">
       <div class="card-title">📄 Exporter un rapport HTML</div>
-      <div class="small" style="margin-bottom:14px">Rapport détaillé avec tables, trades et PnL breakdown. Imprimable en PDF (Ctrl+P).</div>
-      <div class="btn-row cols-3">
-        <button class="btn btn-secondary btn-sm" onclick="window._exportReport('day')">📅 Jour</button>
-        <button class="btn btn-primary btn-sm" onclick="window._exportReport('week')">📅 7j</button>
-        <button class="btn btn-secondary btn-sm" onclick="window._exportReport('month')">📅 30j</button>
+      <div class="small" style="margin-bottom:14px">Rapport détaillé imprimable en PDF (Ctrl+P après ouverture).</div>
+      <div class="form-row">
+        <label class="label">Choisir la période</label>
+        <select class="input" id="exp-period">
+          <option value="day">Aujourd'hui</option>
+          <option value="week" selected>7 derniers jours</option>
+          <option value="month">30 derniers jours</option>
+        </select>
       </div>
+      <button class="btn btn-primary" id="gen-exp">📥 Générer & ouvrir le rapport</button>
     </div>
     <div class="alert info">
       <h4>ℹ Inclus dans le rapport</h4>
@@ -1324,6 +1590,9 @@ route(/^more\/reports\/export$/, async () => {
     </div>
   `);
   setBack("more");
+  document.getElementById("gen-exp").onclick = () => {
+    window._exportReport(document.getElementById("exp-period").value);
+  };
 }, {tab: "more", back: "more"});
 
 window._exportReport = function(period) {
@@ -1488,7 +1757,7 @@ async function init() {
   }
   document.getElementById("app").innerHTML = `
     <div class="header">
-      <button class="header-btn" id="header-more" onclick="go('more')" title="Plus">⋯</button>
+      <button class="header-btn" id="header-more" onclick="go('more')" title="Réglages & Plus">⚙️</button>
       <div class="header-title">WENPOLYMARKET<div class="header-sub">Polymarket Copy &amp; Strategies</div></div>
     </div>
     <div id="content" class="page"></div>

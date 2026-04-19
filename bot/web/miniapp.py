@@ -748,6 +748,95 @@ async def strat_wallet_delete(user: User = Depends(get_current_user)):
     return {"ok": True}
 
 
+@router.post("/strategy-wallet/withdraw")
+async def strat_wallet_withdraw(body: WithdrawReq, user: User = Depends(get_current_user)):
+    addr = getattr(user, "strategy_wallet_address", None)
+    pk_enc = getattr(user, "encrypted_strategy_private_key", None)
+    if not addr or not pk_enc:
+        raise HTTPException(404, "No strategy wallet")
+    if body.amount <= 0: raise HTTPException(400, "Montant invalide")
+    if not _is_valid_address(body.to_address):
+        raise HTTPException(400, "Adresse destination invalide")
+    try: pk = decrypt_private_key(pk_enc, cfg.encryption_key, user.uuid)
+    except Exception: raise HTTPException(500, "Impossible de déchiffrer la clé")
+    try:
+        result = await web3_client.transfer_usdc(
+            from_address=addr, to_address=body.to_address,
+            amount_usdc=body.amount, private_key=pk,
+        )
+    except Exception as e:
+        logger.error(f"strategy withdraw failed for user {user.id}: {e}")
+        raise HTTPException(500, f"Transaction échouée: {e}")
+    if not getattr(result, "success", False):
+        raise HTTPException(500, getattr(result, "error", None) or "Transaction échouée")
+    tx_hash = getattr(result, "tx_hash", None) or ""
+    logger.info(f"User {user.id} STRATEGY withdrew {body.amount} USDC to {body.to_address}")
+    return {"tx_hash": tx_hash}
+
+
+@router.post("/strategy-wallet/export-pk")
+async def strat_wallet_export_pk(body: ExportPkReq, user: User = Depends(get_current_user)):
+    if not body.confirm: raise HTTPException(400, "Confirmation requise")
+    pk_enc = getattr(user, "encrypted_strategy_private_key", None)
+    if not pk_enc: raise HTTPException(404, "No strategy wallet")
+    try: pk = decrypt_private_key(pk_enc, cfg.encryption_key, user.uuid)
+    except Exception: raise HTTPException(500, "Impossible de déchiffrer la clé")
+    logger.warning(f"⚠ User {user.id} exported STRATEGY private key via miniapp")
+    return {"private_key": pk}
+
+
+# ─────────────────────────────────────────────────────────────────
+# REDEEM — Positions résolues à réclamer manuellement sur Polymarket
+# (le redeem on-chain auto n'est pas câblé — fournit liens directs)
+# ─────────────────────────────────────────────────────────────────
+@router.get("/positions/redeemable")
+async def positions_redeemable(user: User = Depends(get_current_user)):
+    """Positions résolues GAGNANTES où l'utilisateur peut réclamer ses USDC.
+
+    Retourne les trades is_settled=True avec settlement_pnl > 0 (BUY winners).
+    Note: le redeem on-chain n'est pas auto — l'utilisateur doit le faire
+    sur Polymarket directement (un lien est fourni par item).
+    """
+    async with async_session() as session:
+        winners = (await session.execute(
+            select(Trade).where(
+                Trade.user_id == user.id,
+                Trade.side == TradeSide.BUY,
+                Trade.is_settled == True,  # noqa: E712
+                Trade.settlement_pnl.isnot(None),
+                Trade.settlement_pnl > 0,
+                Trade.is_paper == False,  # noqa: E712 — only live winners
+            ).order_by(Trade.resolved_at.desc().nullslast(), Trade.created_at.desc()).limit(50)
+        )).scalars().all()
+
+    items = []
+    for t in winners:
+        slug = t.market_id or ""
+        # Polymarket profile redeem URL
+        polymarket_url = f"https://polymarket.com/profile/{user.wallet_address}" if user.wallet_address else "https://polymarket.com/portfolio"
+        items.append({
+            "trade_id": t.trade_id,
+            "market_question": t.market_question or slug[:60],
+            "market_id": slug,
+            "shares": round(t.shares or 0, 4),
+            "invested": round(t.net_amount_usdc or 0, 2),
+            "expected_payout": round((t.shares or 0) * 1.0, 2),
+            "pnl": round(t.settlement_pnl or 0, 2),
+            "outcome": t.market_outcome or "?",
+            "resolved_at": (t.resolved_at.isoformat() if getattr(t, "resolved_at", None) else None),
+            "polymarket_url": polymarket_url,
+        })
+
+    total_to_redeem = sum(i["expected_payout"] for i in items)
+    return {
+        "items": items,
+        "count": len(items),
+        "total_expected_usdc": round(total_to_redeem, 2),
+        "wallet_address": user.wallet_address,
+        "polymarket_portfolio_url": f"https://polymarket.com/profile/{user.wallet_address}" if user.wallet_address else None,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────
 # SETTINGS
 # ─────────────────────────────────────────────────────────────────
