@@ -148,13 +148,21 @@ body {
 .sub-nav-item {
   flex: 1;
   text-align: center;
-  padding: 8px 4px;
+  padding: 8px 6px;
   color: var(--tg-hint);
   font-size: 13px;
   font-weight: 500;
   text-decoration: none;
   border-radius: 7px;
   transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.sub-nav-item .sub-nav-icon { display: inline-block; margin-right: 2px; }
+@media (max-width: 380px) {
+  .sub-nav-item { font-size: 12px; padding: 8px 4px; }
 }
 
 .sub-nav-item.active {

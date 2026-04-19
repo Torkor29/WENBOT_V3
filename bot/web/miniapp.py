@@ -1548,14 +1548,27 @@ async def discover_top_traders(
     # https://lb-api.polymarket.com/profit
     traders: list[dict] = []
     err: Optional[str] = None
-    base_url = "https://lb-api.polymarket.com/profit"
-    params = {"window": period if period in ("day","week","month","all") else "month", "limit": min(limit, 50)}
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(base_url, params=params)
-            if r.status_code == 200:
+    # Polymarket API expects capitalized window values
+    window_map = {"day": "Day", "week": "Week", "month": "Month", "all": "All-Time"}
+    window = window_map.get(period, "Month")
+
+    # Try multiple URL/format combinations as Polymarket API has evolved
+    candidates = [
+        ("https://lb-api.polymarket.com/profit", {"window": window, "limit": min(limit, 50)}),
+        ("https://lb-api.polymarket.com/profit", {"window": window.lower(), "limit": min(limit, 50)}),
+        ("https://lb-api.polymarket.com/volume", {"window": window, "limit": min(limit, 50)}),
+        ("https://data-api.polymarket.com/leaderboard", {"window": window.lower(), "limit": min(limit, 50)}),
+    ]
+
+    last_status = None
+    for url, params in candidates:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(url, params=params)
+                last_status = r.status_code
+                if r.status_code != 200:
+                    continue
                 data = r.json()
-                # Try multiple response shapes (Polymarket API has changed over time)
                 items = []
                 if isinstance(data, list):
                     items = data
@@ -1573,21 +1586,26 @@ async def discover_top_traders(
                     traders.append({
                         "wallet": addr,
                         "wallet_short": f"{addr[:6]}...{addr[-4:]}",
-                        "username": t.get("name") or t.get("username") or t.get("displayName") or "",
-                        "pnl": round(float(t.get("profit") or t.get("pnl") or t.get("pnlUsd") or 0), 2),
+                        "username": t.get("name") or t.get("username") or t.get("displayName") or t.get("pseudonym") or "",
+                        "pnl": round(float(t.get("amount") or t.get("profit") or t.get("pnl") or t.get("pnlUsd") or 0), 2),
                         "volume": round(float(t.get("volume") or t.get("volumeUsd") or 0), 2),
                         "trades_count": int(t.get("trades") or t.get("numTrades") or t.get("tradesCount") or 0),
                         "profile_image": t.get("profileImage") or t.get("avatar") or "",
                     })
-                if not traders:
-                    err = "Polymarket a répondu mais le format n'est pas reconnu — réessayez plus tard"
-            else:
-                err = f"Polymarket renvoie {r.status_code}"
-    except httpx.TimeoutException:
-        err = "Timeout — Polymarket trop lent"
-    except Exception as e:
-        logger.warning(f"discover_top_traders failed: {e}")
-        err = "Erreur de connexion à Polymarket"
+                if traders:
+                    break  # success
+        except httpx.TimeoutException:
+            err = "Polymarket met trop de temps à répondre"
+            continue
+        except Exception as e:
+            logger.warning(f"discover_top_traders {url} failed: {e}")
+            continue
+
+    if not traders and not err:
+        if last_status:
+            err = f"L'API leaderboard Polymarket est temporairement indisponible (HTTP {last_status})"
+        else:
+            err = "Connexion à Polymarket impossible — réessayez dans quelques instants"
 
     # Mark which ones user already follows
     followed = set()

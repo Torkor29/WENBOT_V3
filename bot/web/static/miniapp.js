@@ -767,38 +767,69 @@ route(/^copy\/discover$/, async () => { go("copy/discover/month"); }, {tab: "cop
 
 route(/^copy\/discover\/(day|week|month|all)$/, async (m) => {
   const period = m[1];
+  const periodLabel = {day:"24h", week:"7 jours", month:"30 jours", all:"All-time"}[period];
   const [d, traders, positions] = await Promise.all([
     cached("discover-" + period, () => api("/discover/top-traders?period=" + period), 60000),
     cached("copy-traders", () => api("/copy/traders"), 10000),
     cached("copy-positions", () => api("/copy/positions")),
   ]);
+
+  const hasError = !!d.error;
+  const hasResults = (d.traders || []).length > 0;
+
   render(`
-    <div class="page-title">Copy Trading</div>
+    <div class="page-title">🔍 Découvrir</div>
     ${copyNav("copy/discover", {traders: traders?.count || 0, positions: positions?.count || 0})}
-    <div class="small" style="margin-bottom:12px">Top traders Polymarket par profit. Ajoute en 1 clic.</div>
-    ${subNav([
-      {label:"24h", href:"copy/discover/day"},
-      {label:"7j", href:"copy/discover/week"},
-      {label:"30j", href:"copy/discover/month"},
-      {label:"All", href:"copy/discover/all"},
-    ], "copy/discover/" + period)}
-    ${d.error ? `<div class="alert warning"><p>${esc(d.error)}</p></div>` : ""}
-    ${d.traders.length === 0 && !d.error
-      ? emptyState("🔍", "Aucun trader", "L'API n'a pas retourné de résultats.")
-      : `<div class="card card-flush"><div class="list">${d.traders.map((t, i) => `
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">📈 Top traders Polymarket — ${periodLabel}</div>
+      <div class="small" style="margin-bottom:10px">Classement par profit net. Tap un trader pour voir ses positions actuelles, ou "+ Suivre" pour copier ses prochains trades.</div>
+      ${subNav([
+        {label:"24h", href:"copy/discover/day"},
+        {label:"7j", href:"copy/discover/week"},
+        {label:"30j", href:"copy/discover/month"},
+        {label:"All", href:"copy/discover/all"},
+      ], "copy/discover/" + period)}
+    </div>
+
+    ${hasError ? `
+      <div class="alert warning">
+        <h4>⚠ Données indisponibles</h4>
+        <p>${esc(d.error)}</p>
+        <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="invalidate('discover-');dispatch()">⟳ Réessayer</button>
+      </div>
+      <div class="alert info">
+        <h4>💡 En attendant</h4>
+        <p>Vous pouvez ajouter manuellement un trader si vous connaissez son adresse Polygon (0x...).</p>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="go('copy/traders/add')">+ Ajouter par adresse</button>
+      </div>
+    ` : ""}
+
+    ${hasResults ? `
+      <div class="card card-flush"><div class="list">${d.traders.map((t, i) => {
+        const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : null;
+        const avatarBg = i < 3 ? "linear-gradient(135deg,#ffd700,#ff8c00)" : "linear-gradient(135deg,var(--tg-btn),var(--purple))";
+        return `
           <div class="list-item">
-            <div class="avatar" style="background:${i<3?'linear-gradient(135deg,#ffd700,#ff8c00)':'linear-gradient(135deg,var(--tg-btn),var(--purple))'}">${i+1}</div>
-            <div class="list-body" onclick="go('copy/discover/trader/${t.wallet}')">
+            <div class="avatar" style="background:${avatarBg};font-size:${medal?'18px':'14px'}">${medal || '#'+(i+1)}</div>
+            <div class="list-body" onclick="go('copy/discover/trader/${t.wallet}')" style="cursor:pointer">
               <div class="list-title mono">${esc(t.username || t.wallet_short)}</div>
-              <div class="list-sub">${fmtUsd(t.volume)} vol · ${t.trades_count || '?'} trades</div>
+              <div class="list-sub">
+                <span class="${pnlClass(t.pnl)}" style="font-weight:600">${pnlSign(t.pnl)}</span>
+                ${t.volume > 0 ? ` · ${fmtUsd(t.volume)} vol` : ''}
+                ${t.trades_count > 0 ? ` · ${t.trades_count} trades` : ''}
+              </div>
             </div>
-            <div class="list-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-              <div class="${pnlClass(t.pnl)}" style="font-weight:700">${pnlSign(t.pnl)}</div>
+            <div class="list-right">
               ${t.followed
-                ? badge("✓ Suivi", "green")
-                : `<button class="btn btn-primary btn-sm" style="padding:4px 10px" onclick="window._follow('${t.wallet}', event)">+ Suivre</button>`}
+                ? `<span class="badge badge-green">✓ Suivi</span>`
+                : `<button class="btn btn-primary btn-sm" style="padding:6px 12px" onclick="window._follow('${t.wallet}', event)">+ Suivre</button>`}
             </div>
-          </div>`).join("")}</div></div>`}
+          </div>`;
+      }).join("")}</div></div>
+    ` : ""}
+
+    ${!hasError && !hasResults ? emptyState("🔍", "Aucun trader trouvé", "Aucun résultat pour la période " + periodLabel + ".") : ""}
   `);
 }, {tab: "copy"});
 
