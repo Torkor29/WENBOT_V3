@@ -1,6 +1,8 @@
 """Telegram Mini App — FastAPI router with all API endpoints."""
 
+import json as _json
 import logging
+import re as _re
 import urllib.parse
 from datetime import datetime, timedelta, date
 from typing import Optional, Any
@@ -1555,95 +1557,72 @@ async def discover_top_traders(
         }
 
 
+_LB_TRADER_RE = _re.compile(
+    r'\{"rank":\d+,"proxyWallet":"0x[a-fA-F0-9]{40}"[^{}]*?"amount":[\d.\-eE+]+[^{}]*?\}'
+)
+_LB_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+    "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+}
+
+
+async def _scrape_polymarket_leaderboard(poly_period: str, limit: int) -> tuple[list, Optional[str]]:
+    """Scrape https://polymarket.com/leaderboard/overall/{poly_period}/profit
+    pour récupérer les vrais classements par période (l'API publique ne supporte
+    pas les périodes — seul le frontend SSR a les bonnes données).
+
+    poly_period in ('today', 'weekly', 'monthly', 'all')
+    """
+    url = f"https://polymarket.com/leaderboard/overall/{poly_period}/profit"
+    items: list = []
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(url, headers=_LB_BROWSER_HEADERS)
+            if r.status_code != 200:
+                return [], f"Polymarket leaderboard {r.status_code}"
+            html = r.text
+            # Extract all trader objects from the SSR HTML
+            for match in _LB_TRADER_RE.finditer(html):
+                if len(items) >= limit:
+                    break
+                raw = match.group(0)
+                try:
+                    obj = _json.loads(raw)
+                except Exception:
+                    continue
+                addr = str(obj.get("proxyWallet") or "").lower().strip()
+                if not addr.startswith("0x") or len(addr) != 42:
+                    continue
+                items.append({
+                    "wallet": addr,
+                    "wallet_short": f"{addr[:6]}...{addr[-4:]}",
+                    "username": str(obj.get("pseudonym") or obj.get("name") or ""),
+                    "pnl": round(float(obj.get("amount") or 0), 2),
+                    "volume": round(float(obj.get("volume") or 0), 2),
+                    "trades_count": 0,
+                    "profile_image": str(obj.get("profileImageOptimized") or obj.get("profileImage") or ""),
+                })
+            if not items:
+                return [], "Aucun trader extrait du HTML Polymarket"
+            return items, None
+    except httpx.TimeoutException:
+        return [], "Polymarket trop lent à répondre"
+    except Exception as e:
+        logger.warning(f"_scrape_polymarket_leaderboard {url} failed: {e}")
+        return [], f"Erreur scraping: {type(e).__name__}"
+
+
 async def _do_discover_top_traders(period: str, limit: int, user: User) -> dict:
     traders: list = []
     err: Optional[str] = None
-    # Polymarket leaderboard API expects 'period' (capitalized) — verified 2026-04
-    # period=Day|Week|Month|All-Time
-    period_map = {"day": "Day", "week": "Week", "month": "Month", "all": "All-Time"}
-    polymarket_period = period_map.get(period, "Month")
+    # Map period to Polymarket frontend URL slug
+    period_map = {"day": "today", "week": "weekly", "month": "monthly", "all": "all"}
+    poly_period = period_map.get(period, "monthly")
 
-    # Two endpoints: /profit (PnL ranking) and /volume (volume ranking)
-    # We use /profit by default
-    candidates = [
-        ("https://lb-api.polymarket.com/profit", {"period": polymarket_period, "limit": min(limit, 50)}),
-        ("https://lb-api.polymarket.com/volume", {"period": polymarket_period, "limit": min(limit, 50)}),
-    ]
-
-    last_status = None
-    for url, params in candidates:
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.get(url, params=params)
-                last_status = r.status_code
-                if r.status_code != 200:
-                    continue
-                try:
-                    data = r.json()
-                except Exception as je:
-                    logger.warning(f"discover: JSON parse failed for {url}: {je}")
-                    continue
-
-                # Extract items list defensively
-                items = []
-                if isinstance(data, list):
-                    items = data
-                elif isinstance(data, dict):
-                    for k in ("users", "data", "items", "leaderboard", "results"):
-                        v = data.get(k)
-                        if isinstance(v, list):
-                            items = v
-                            break
-
-                for t in items[:limit]:
-                    if not isinstance(t, dict):
-                        continue
-                    raw = t.get("proxyWallet") or t.get("walletAddress") or t.get("address") \
-                          or t.get("user") or t.get("wallet") or ""
-                    addr = str(raw).lower().strip()
-                    if not addr or not addr.startswith("0x") or len(addr) != 42:
-                        continue
-
-                    def _num(*keys):
-                        for k in keys:
-                            v = t.get(k)
-                            if v is not None:
-                                try: return float(v)
-                                except (TypeError, ValueError): continue
-                        return 0.0
-
-                    def _int(*keys):
-                        for k in keys:
-                            v = t.get(k)
-                            if v is not None:
-                                try: return int(v)
-                                except (TypeError, ValueError): continue
-                        return 0
-
-                    traders.append({
-                        "wallet": addr,
-                        "wallet_short": f"{addr[:6]}...{addr[-4:]}",
-                        "username": str(t.get("pseudonym") or t.get("name") or t.get("username") or t.get("displayName") or ""),
-                        "pnl": round(_num("amount", "profit", "pnl", "pnlUsd"), 2),
-                        "volume": round(_num("volume", "volumeUsd"), 2),
-                        "trades_count": _int("trades", "numTrades", "tradesCount"),
-                        "profile_image": str(t.get("profileImageOptimized") or t.get("profileImage") or t.get("avatar") or ""),
-                    })
-
-                if traders:
-                    break  # success
-        except httpx.TimeoutException:
-            err = "Polymarket met trop de temps à répondre"
-            continue
-        except Exception as e:
-            logger.warning(f"discover_top_traders {url} failed: {type(e).__name__}: {e}")
-            continue
-
-    if not traders and not err:
-        if last_status:
-            err = f"Polymarket leaderboard indisponible (HTTP {last_status})"
-        else:
-            err = "Connexion à Polymarket impossible"
+    # Scrape la page leaderboard SSR de Polymarket pour obtenir le classement
+    # par période (l'API publique /profit ignore le param de période).
+    traders, err = await _scrape_polymarket_leaderboard(poly_period, min(limit, 50))
 
     # Mark which ones user already follows (defensive)
     try:
