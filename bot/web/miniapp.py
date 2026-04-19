@@ -793,10 +793,23 @@ async def strat_wallet_export_pk(body: ExportPkReq, user: User = Depends(get_cur
 async def positions_redeemable(user: User = Depends(get_current_user)):
     """Positions résolues GAGNANTES où l'utilisateur peut réclamer ses USDC.
 
-    Retourne les trades is_settled=True avec settlement_pnl > 0 (BUY winners).
-    Note: le redeem on-chain n'est pas auto — l'utilisateur doit le faire
-    sur Polymarket directement (un lien est fourni par item).
+    Retourne les trades :
+      - LIVE (pas paper)
+      - side BUY (vous avez acheté un outcome)
+      - is_settled=True (le marché s'est résolu)
+      - settlement_pnl > 0 (vous avez gagné)
+
+    Note : le redeem on-chain auto (appel redeemPositions sur le contrat
+    Conditional Tokens Polygon) n'est pas câblé. L'utilisateur clique le
+    lien Polymarket pour réclamer ses USDC en 2 clics.
     """
+    if not user.wallet_address:
+        return {
+            "items": [], "count": 0, "total_expected_usdc": 0,
+            "wallet_address": None, "polymarket_portfolio_url": None,
+            "error": "Aucun wallet configuré",
+        }
+
     async with async_session() as session:
         winners = (await session.execute(
             select(Trade).where(
@@ -805,26 +818,30 @@ async def positions_redeemable(user: User = Depends(get_current_user)):
                 Trade.is_settled == True,  # noqa: E712
                 Trade.settlement_pnl.isnot(None),
                 Trade.settlement_pnl > 0,
-                Trade.is_paper == False,  # noqa: E712 — only live winners
+                Trade.is_paper == False,  # noqa: E712 — only live winners need on-chain redeem
             ).order_by(Trade.resolved_at.desc().nullslast(), Trade.created_at.desc()).limit(50)
         )).scalars().all()
 
     items = []
     for t in winners:
-        slug = t.market_id or ""
-        # Polymarket profile redeem URL
-        polymarket_url = f"https://polymarket.com/profile/{user.wallet_address}" if user.wallet_address else "https://polymarket.com/portfolio"
+        # Calculate shares (fallback to net_amount/price if shares is null)
+        shares = t.shares
+        if not shares and t.price and t.price > 0:
+            shares = (t.net_amount_usdc or 0) / t.price
+        shares = float(shares or 0)
+        # On Polymarket, each winning share pays out exactly 1 USDC
+        expected_payout = shares * 1.0
         items.append({
             "trade_id": t.trade_id,
-            "market_question": t.market_question or slug[:60],
-            "market_id": slug,
-            "shares": round(t.shares or 0, 4),
+            "market_question": t.market_question or (t.market_id or "")[:60],
+            "market_id": t.market_id or "",
+            "shares": round(shares, 4),
             "invested": round(t.net_amount_usdc or 0, 2),
-            "expected_payout": round((t.shares or 0) * 1.0, 2),
+            "expected_payout": round(expected_payout, 2),
             "pnl": round(t.settlement_pnl or 0, 2),
             "outcome": t.market_outcome or "?",
             "resolved_at": (t.resolved_at.isoformat() if getattr(t, "resolved_at", None) else None),
-            "polymarket_url": polymarket_url,
+            "settled_at": (t.created_at.isoformat() if t.created_at else None),
         })
 
     total_to_redeem = sum(i["expected_payout"] for i in items)
@@ -833,7 +850,7 @@ async def positions_redeemable(user: User = Depends(get_current_user)):
         "count": len(items),
         "total_expected_usdc": round(total_to_redeem, 2),
         "wallet_address": user.wallet_address,
-        "polymarket_portfolio_url": f"https://polymarket.com/profile/{user.wallet_address}" if user.wallet_address else None,
+        "polymarket_portfolio_url": f"https://polymarket.com/profile/{user.wallet_address}",
     }
 
 
