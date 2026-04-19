@@ -1540,13 +1540,23 @@ async def discover_top_traders(
     limit: int = 20,
     user: User = Depends(get_current_user),
 ):
-    """Top traders du leaderboard Polymarket.
+    """Top traders du leaderboard Polymarket. Robuste — n'échoue jamais en 500.
 
     Période: day / week / month / all. Retourne adresse, volume, PnL si dispo.
     """
-    # Polymarket data-api leaderboard endpoint
-    # https://lb-api.polymarket.com/profit
-    traders: list[dict] = []
+    try:
+        return await _do_discover_top_traders(period, limit, user)
+    except Exception as e:
+        logger.error(f"discover_top_traders crashed: {e}", exc_info=True)
+        return {
+            "traders": [],
+            "period": period,
+            "error": f"Erreur interne: {type(e).__name__} — {str(e)[:200]}",
+        }
+
+
+async def _do_discover_top_traders(period: str, limit: int, user: User) -> dict:
+    traders: list = []
     err: Optional[str] = None
     # Polymarket leaderboard API expects 'period' (capitalized) — verified 2026-04
     # period=Day|Week|Month|All-Time
@@ -1563,59 +1573,93 @@ async def discover_top_traders(
     last_status = None
     for url, params in candidates:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=15) as client:
                 r = await client.get(url, params=params)
                 last_status = r.status_code
                 if r.status_code != 200:
                     continue
-                data = r.json()
-                items = data if isinstance(data, list) else (
-                    next((data[k] for k in ("users","data","items","leaderboard","results")
-                          if k in data and isinstance(data[k], list)), [])
-                )
+                try:
+                    data = r.json()
+                except Exception as je:
+                    logger.warning(f"discover: JSON parse failed for {url}: {je}")
+                    continue
+
+                # Extract items list defensively
+                items = []
+                if isinstance(data, list):
+                    items = data
+                elif isinstance(data, dict):
+                    for k in ("users", "data", "items", "leaderboard", "results"):
+                        v = data.get(k)
+                        if isinstance(v, list):
+                            items = v
+                            break
+
                 for t in items[:limit]:
                     if not isinstance(t, dict):
                         continue
-                    addr = (t.get("proxyWallet") or t.get("walletAddress") or t.get("address")
-                            or t.get("user") or t.get("wallet") or "").lower().strip()
+                    raw = t.get("proxyWallet") or t.get("walletAddress") or t.get("address") \
+                          or t.get("user") or t.get("wallet") or ""
+                    addr = str(raw).lower().strip()
                     if not addr or not addr.startswith("0x") or len(addr) != 42:
                         continue
+
+                    def _num(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v is not None:
+                                try: return float(v)
+                                except (TypeError, ValueError): continue
+                        return 0.0
+
+                    def _int(*keys):
+                        for k in keys:
+                            v = t.get(k)
+                            if v is not None:
+                                try: return int(v)
+                                except (TypeError, ValueError): continue
+                        return 0
+
                     traders.append({
                         "wallet": addr,
                         "wallet_short": f"{addr[:6]}...{addr[-4:]}",
-                        # Polymarket API renvoie 'pseudonym' et 'name'
-                        "username": t.get("pseudonym") or t.get("name") or t.get("username") or t.get("displayName") or "",
-                        # 'amount' est la valeur principale sur /profit (= PnL en USDC)
-                        "pnl": round(float(t.get("amount") or t.get("profit") or t.get("pnl") or t.get("pnlUsd") or 0), 2),
-                        "volume": round(float(t.get("volume") or t.get("volumeUsd") or 0), 2),
-                        "trades_count": int(t.get("trades") or t.get("numTrades") or t.get("tradesCount") or 0),
-                        "profile_image": t.get("profileImageOptimized") or t.get("profileImage") or t.get("avatar") or "",
+                        "username": str(t.get("pseudonym") or t.get("name") or t.get("username") or t.get("displayName") or ""),
+                        "pnl": round(_num("amount", "profit", "pnl", "pnlUsd"), 2),
+                        "volume": round(_num("volume", "volumeUsd"), 2),
+                        "trades_count": _int("trades", "numTrades", "tradesCount"),
+                        "profile_image": str(t.get("profileImageOptimized") or t.get("profileImage") or t.get("avatar") or ""),
                     })
+
                 if traders:
                     break  # success
         except httpx.TimeoutException:
             err = "Polymarket met trop de temps à répondre"
             continue
         except Exception as e:
-            logger.warning(f"discover_top_traders {url} failed: {e}")
+            logger.warning(f"discover_top_traders {url} failed: {type(e).__name__}: {e}")
             continue
 
     if not traders and not err:
         if last_status:
-            err = f"L'API leaderboard Polymarket est temporairement indisponible (HTTP {last_status})"
+            err = f"Polymarket leaderboard indisponible (HTTP {last_status})"
         else:
-            err = "Connexion à Polymarket impossible — réessayez dans quelques instants"
+            err = "Connexion à Polymarket impossible"
 
-    # Mark which ones user already follows
-    followed = set()
-    async with async_session() as session:
-        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
-        if u.settings and u.settings.followed_wallets:
-            followed = {w.lower() for w in u.settings.followed_wallets}
-    for t in traders:
-        t["followed"] = t["wallet"] in followed
+    # Mark which ones user already follows (defensive)
+    try:
+        followed: set = set()
+        async with async_session() as session:
+            u = (await session.execute(select(User).where(User.id == user.id))).scalar_one_or_none()
+            if u and u.settings and u.settings.followed_wallets:
+                followed = {str(w).lower() for w in u.settings.followed_wallets if w}
+        for t in traders:
+            t["followed"] = t["wallet"] in followed
+    except Exception as e:
+        logger.warning(f"discover followed check failed: {e}")
+        for t in traders:
+            t.setdefault("followed", False)
 
-    return {"traders": traders, "period": params["window"], "error": err}
+    return {"traders": traders, "period": period, "count": len(traders), "error": err}
 
 
 @router.get("/discover/trader/{wallet}/markets")
