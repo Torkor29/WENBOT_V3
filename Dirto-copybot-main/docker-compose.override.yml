@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  redis:
+    ports:
+      - "6379:6379"
+
+  telegram-bot:
+    volumes:
+      - ./bot:/app
+      - ./shared:/app/shared
+      - ./wallet:/app/wallet
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=DEBUG
+
+  execution-engine:
+    volumes:
+      - ./engine:/app
+      - ./shared:/app/shared
+      - ./wallet:/app/wallet
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=DEBUG
+
+  strategy-example:
+    volumes:
+      - ./strategies/example_strategy:/app
+      - ./shared:/app/shared
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=DEBUG

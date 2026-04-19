@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: polybot
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    ports:
+      - "8080:8080"
+    command: python -m bot.main
+
+  db:
+    image: postgres:16-alpine
+    container_name: polybot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: polybot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-polybot_dev}
+      POSTGRES_DB: polybot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polybot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: polybot-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

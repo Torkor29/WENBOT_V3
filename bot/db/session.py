@@ -120,6 +120,10 @@ async def init_db() -> None:
             # GroupConfig: strategy topic IDs
             "ALTER TABLE group_config ADD COLUMN topic_strategies_id INTEGER",
             "ALTER TABLE group_config ADD COLUMN topic_strategies_perf_id INTEGER",
+            # Fine-grained notification flags (per-event)
+            "ALTER TABLE user_settings ADD COLUMN notify_on_buy BOOLEAN DEFAULT true",
+            "ALTER TABLE user_settings ADD COLUMN notify_on_sell BOOLEAN DEFAULT true",
+            "ALTER TABLE user_settings ADD COLUMN notify_on_sl_tp BOOLEAN DEFAULT true",
         ]
         for stmt in migrations:
             await _safe_add_column(conn, stmt)

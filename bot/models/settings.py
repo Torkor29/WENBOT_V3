@@ -140,6 +140,11 @@ class UserSettings(Base):
     min_conviction_pct: Mapped[float] = mapped_column(Float, default=2.0)
     max_price_drift_pct: Mapped[float] = mapped_column(Float, default=5.0)
 
+    # Notification fine-grained control
+    notify_on_buy: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_on_sell: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_on_sl_tp: Mapped[bool] = mapped_column(Boolean, default=True)
+
     # Relationship
     user: Mapped["User"] = relationship("User", back_populates="settings")
 

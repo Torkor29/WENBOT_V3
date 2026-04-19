@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: execution-engine
+  namespace: wenbot-prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: execution-engine
+  template:
+    metadata:
+      labels:
+        app: execution-engine
+    spec:
+      containers:
+        - name: execution-engine
+          image: wenbot/engine:latest
+          imagePullPolicy: Never
+          envFrom:
+            - secretRef:
+                name: wenbot-secrets
+          resources:
+            requests:
+              memory: "192Mi"
+              cpu: "100m"
+            limits:
+              memory: "384Mi"
+              cpu: "300m"

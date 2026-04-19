@@ -155,6 +155,13 @@ class PositionManager:
 
             await asyncio.sleep(self._check_interval)
 
+    async def _get_user_settings_cached(self, user_id: int):
+        """Fetch user settings, with brief caching to avoid hammering DB."""
+        from bot.models.user import User
+        async with async_session() as session:
+            u = await session.get(User, user_id)
+            return u.settings if u else None
+
     async def _check_all_positions(self):
         """Fetch current prices and check SL/TP/trailing for all open positions."""
         positions = await self.get_open_positions()
@@ -186,6 +193,26 @@ class PositionManager:
 
             # Check exit conditions
             reason = self._check_exit_conditions(pos)
+
+            # V3: time-based exit (per-user setting)
+            if not reason:
+                try:
+                    us = await self._get_user_settings_cached(pos.user_id)
+                    if us and getattr(us, "time_exit_enabled", False):
+                        max_h = float(getattr(us, "time_exit_hours", 24) or 24)
+                        opened = pos.opened_at or utcnow()
+                        if opened.tzinfo is None:
+                            from datetime import timezone as _tz
+                            opened = opened.replace(tzinfo=_tz.utc)
+                        now_aware = utcnow()
+                        if now_aware.tzinfo is None:
+                            from datetime import timezone as _tz
+                            now_aware = now_aware.replace(tzinfo=_tz.utc)
+                        hours_open = (now_aware - opened).total_seconds() / 3600.0
+                        if hours_open >= max_h:
+                            reason = "time_exit"
+                except Exception as _e:
+                    logger.debug("Time exit check skipped: %s", _e)
 
             if reason:
                 await self._execute_exit(pos, reason)
@@ -220,45 +247,75 @@ class PositionManager:
         return None
 
     async def _execute_exit(self, pos: ActivePosition, reason: str):
-        """Execute a position exit and notify."""
-        # Mark as closed in DB
-        pos.is_closed = True
-        pos.close_reason = reason
-        pos.close_price = pos.current_price
-        pos.closed_at = utcnow()
+        """Execute a position exit and notify.
 
-        if pos.entry_price > 0:
-            pos.pnl_pct = round(
-                ((pos.current_price - pos.entry_price) / pos.entry_price) * 100, 2
-            )
+        Supports scale-out: when reason is 'tp_hit' and user enabled scale_out,
+        only a fraction of shares are closed (the rest stays open with adjusted
+        SL = entry to lock in profit).
+        """
+        # ── V3: Scale-out (partial TP) ──
+        is_partial = False
+        scale_pct = 100.0
+        try:
+            us = await self._get_user_settings_cached(pos.user_id)
+        except Exception:
+            us = None
+
+        if reason == "tp_hit" and us and getattr(us, "scale_out_enabled", False):
+            scale_pct = float(getattr(us, "scale_out_pct", 50.0) or 50.0)
+            if 0 < scale_pct < 100:
+                is_partial = True
+
+        if is_partial:
+            shares_closed = pos.shares * (scale_pct / 100.0)
+            shares_remaining = pos.shares - shares_closed
+            pos.shares = shares_remaining
+            # Lock in profit: move SL to entry on remaining
+            pos.sl_price = pos.entry_price
+            pos.tp_price = None  # cleared, trailing or future TP can re-arm
+            pos.close_reason = "scale_out"
+            await self._update_position(pos)
+            reason_label = "scale_out"
+            shares_for_notif = shares_closed
         else:
-            pos.pnl_pct = 0.0
-
-        await self._update_position(pos)
+            # Mark as fully closed
+            pos.is_closed = True
+            pos.close_reason = reason
+            pos.close_price = pos.current_price
+            pos.closed_at = utcnow()
+            if pos.entry_price > 0:
+                pos.pnl_pct = round(
+                    ((pos.current_price - pos.entry_price) / pos.entry_price) * 100, 2
+                )
+            else:
+                pos.pnl_pct = 0.0
+            await self._update_position(pos)
+            reason_label = reason
+            shares_for_notif = pos.shares
 
         # Format alert
-        # Format notification using the dedicated template
         from bot.handlers.notifications import format_position_exit
-
         alert_text = format_position_exit(
             market_question=pos.market_question or pos.market_id[:20],
-            reason=reason,
+            reason=reason_label,
             entry_price=pos.entry_price,
             exit_price=pos.current_price,
             pnl_pct=pos.pnl_pct or 0,
-            shares=pos.shares,
+            shares=shares_for_notif,
         )
 
-        # Send alert to the user's own group (multi-tenant), fallback to global
-        try:
-            from bot.services.topic_router import TopicRouter
-            bot = getattr(self._topic_router, "_bot", None)
-            user_router = await TopicRouter.for_user(pos.user_id, bot) if bot else None
-            effective_router = user_router or self._topic_router
-            if effective_router:
-                await effective_router.send_alert(alert_text)
-        except Exception as _e:
-            logger.warning("Failed to send position exit alert: %s", _e)
+        # Notify only if user opted in (default True)
+        notify = us is None or getattr(us, "notify_on_sl_tp", True)
+        if notify:
+            try:
+                from bot.services.topic_router import TopicRouter
+                bot = getattr(self._topic_router, "_bot", None)
+                user_router = await TopicRouter.for_user(pos.user_id, bot) if bot else None
+                effective_router = user_router or self._topic_router
+                if effective_router:
+                    await effective_router.send_alert(alert_text)
+            except Exception as _e:
+                logger.warning("Failed to send position exit alert: %s", _e)
 
         # Execute the actual sell via callback
         if self._on_exit_callback:

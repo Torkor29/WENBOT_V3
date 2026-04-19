@@ -342,6 +342,35 @@ class CopyTradeEngine:
                     f"fixed_amount={user_settings.fixed_amount}"
                 )
 
+                # ── V3: Auto-pause cold traders + hot streak boost ──
+                hot_boost = 1.0
+                if self._trader_tracker and signal.master_wallet:
+                    try:
+                        # Auto-pause if trader is cold and user opted in
+                        if getattr(user_settings, "auto_pause_cold_traders", False):
+                            is_cold = await self._trader_tracker.check_auto_pause(signal.master_wallet)
+                            if is_cold:
+                                logger.info(
+                                    f"[{tg_id}] 🥶 Cold trader auto-pause: "
+                                    f"{signal.master_wallet[:10]}..."
+                                )
+                                await self._notify_error(
+                                    user, signal,
+                                    f"Trader {signal.master_wallet[:10]}... a un win rate "
+                                    f"sous le seuil ({user_settings.cold_trader_threshold:.0f}%) — "
+                                    f"copie sautée. Désactivez l'auto-pause cold pour copier quand même.",
+                                )
+                                return
+                        # Hot streak boost
+                        boost_setting = float(getattr(user_settings, "hot_streak_boost", 1.0) or 1.0)
+                        if boost_setting > 1.0:
+                            mult = await self._trader_tracker.get_hot_multiplier(signal.master_wallet)
+                            if mult > 1.0:
+                                hot_boost = boost_setting
+                                logger.info(f"[{tg_id}] 🔥 Hot streak boost: {hot_boost:.2f}x")
+                    except Exception as e:
+                        logger.warning("Trader tracker check error (continuing): %s", e)
+
                 try:
                     gross_amount = calculate_trade_size(
                         user_settings,
@@ -354,7 +383,11 @@ class CopyTradeEngine:
                     await self._notify_error(user, signal, f"Erreur de sizing : {e}")
                     return
 
-                logger.info(f"[{tg_id}] 💰 Sized at {gross_amount:.2f} USDC")
+                # Apply hot streak boost
+                if hot_boost > 1.0:
+                    gross_amount *= hot_boost
+
+                logger.info(f"[{tg_id}] 💰 Sized at {gross_amount:.2f} USDC (boost {hot_boost:.2f}x)")
 
                 # C2 FIX: Atomic daily limit check with row-level lock
                 if not is_paper:
@@ -575,9 +608,15 @@ class CopyTradeEngine:
                     del pk
                     pk = None
 
-                await self._notify_success(
-                    user, trade, fee_result, elapsed, signal
-                )
+                # ── V3: Per-event notification flags ──
+                _side = (signal.side or "").upper()
+                _flag_attr = "notify_on_buy" if _side == "BUY" else "notify_on_sell"
+                if getattr(user_settings, _flag_attr, True):
+                    await self._notify_success(
+                        user, trade, fee_result, elapsed, signal
+                    )
+                else:
+                    logger.info(f"[{tg_id}] Notification {_side} skipped per user settings")
 
                 # ── V3: Register position for active SL/TP monitoring ──
                 if (

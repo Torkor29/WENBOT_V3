@@ -1,0 +1,9 @@
+aiogram>=3.3.0
+supabase>=2.0.0
+redis[hiredis]>=5.0.0
+web3>=6.11.0
+eth-account>=0.10.0
+cryptography>=41.0.0
+py-clob-client>=0.17.0
+python-dotenv>=1.0.0
+httpx>=0.25.0

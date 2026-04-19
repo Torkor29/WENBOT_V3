@@ -1,0 +1,50 @@
+# =============================================================================
+# Strategy Deployment Template
+# =============================================================================
+# Usage:
+#   1. Copy this file: cp strategy-template.yaml strategy-<ID>.yaml
+#   2. Replace STRATEGY_ID_PLACEHOLDER with the actual strategy ID
+#   3. Replace STRATEGY_IMAGE_PLACEHOLDER with the Docker image to use
+#   4. Apply: kubectl apply -f strategy-<ID>.yaml
+#
+# Or use the deploy_strategy.sh script which automates these steps:
+#   ./scripts/deploy_strategy.sh <strategy_id> <docker_image>
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strategy-STRATEGY_ID_PLACEHOLDER
+  namespace: wenbot-prod
+  labels:
+    app: strategy
+    role: strategy
+    strategy-id: "STRATEGY_ID_PLACEHOLDER"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: strategy
+      strategy-id: "STRATEGY_ID_PLACEHOLDER"
+  template:
+    metadata:
+      labels:
+        app: strategy
+        role: strategy
+        strategy-id: "STRATEGY_ID_PLACEHOLDER"
+    spec:
+      containers:
+        - name: strategy
+          image: STRATEGY_IMAGE_PLACEHOLDER
+          imagePullPolicy: Never
+          env:
+            - name: REDIS_URL
+              value: "redis://redis.wenbot-prod.svc.cluster.local:6379"
+            - name: STRATEGY_ID
+              value: "STRATEGY_ID_PLACEHOLDER"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"

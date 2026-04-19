@@ -1038,36 +1038,43 @@ route(/^more\/settings$/, async () => {
     <div class="card">
       <div class="card-title">🔌 Mode de trading</div>
       ${me.paper_trading
-        ? `<div class="alert info" style="margin-bottom:10px"><p><b>Mode PAPER actif</b> — solde fictif ${fmtUsd(me.paper_balance)}, aucun USDC réel.</p></div>
-           <button class="btn btn-danger" onclick="window._toggleMode(false)">⚠ Passer en LIVE (réel)</button>`
-        : `<div class="alert warning" style="margin-bottom:10px"><p><b>Mode LIVE actif</b> — trades réels avec USDC Polygon.</p></div>
-           <button class="btn btn-secondary" onclick="window._toggleMode(true)">📝 Repasser en Paper</button>`}
+        ? `<div class="alert info" style="margin-bottom:10px"><h4>📝 Mode PAPER actif</h4><p>Tous les trades sont <b>simulés</b> avec un solde fictif de ${fmtUsd(me.paper_balance)}. Aucun USDC réel n'est utilisé. Idéal pour tester votre config.</p></div>
+           <button class="btn btn-danger" onclick="window._toggleMode(false)">⚠ Passer en mode LIVE (USDC réel)</button>`
+        : `<div class="alert warning" style="margin-bottom:10px"><h4>💵 Mode LIVE actif</h4><p>Les trades sont <b>réels</b> sur Polygon. Chaque copie utilise votre USDC on-chain.</p></div>
+           <button class="btn btn-secondary" onclick="window._toggleMode(true)">📝 Repasser en mode Paper</button>`}
       <div style="height:10px"></div>
-      ${tgl("is_paused", "En pause", "Stoppe temporairement la copie", s.is_paused)}
+      ${tgl("is_paused", "Mettre le copy trading en pause", "Stoppe temporairement la copie de nouveaux signaux. Les positions ouvertes restent gérées.", s.is_paused)}
     </div>
 
     <div class="card">
       <div class="card-title">💰 Capital & taille des trades</div>
-      ${num("allocated_capital", "Capital alloué USDC", s.allocated_capital, 10, 10, 100000)}
-      ${sel("sizing_mode", "Mode de sizing", s.sizing_mode || "fixed",
-        [{value:"fixed", label:"🟰 Fixe"},{value:"percent", label:"% du capital"},{value:"proportional", label:"📏 Proportionnel"},{value:"kelly", label:"🧠 Kelly"}])}
-      ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000, "Si mode FIXE")}
-      ${num("percent_per_trade", "% par trade", s.percent_per_trade, 0.5, 0.1, 100, "Si mode PERCENT")}
-      ${num("multiplier", "Multiplicateur", s.multiplier, 0.1, 0.1, 10)}
-      ${num("min_trade_usdc", "Min USDC", s.min_trade_usdc, 0.5, 0, 1000)}
-      ${num("max_trade_usdc", "Max USDC", s.max_trade_usdc, 0.5, 0, 10000)}
-      ${num("daily_limit_usdc", "Limite quotidienne USDC", s.daily_limit_usdc, 1, 0, 100000)}
+      ${num("allocated_capital", "Capital alloué (USDC)", s.allocated_capital, 10, 10, 100000, "Capital total dédié au copy trading. Sert de base pour les modes %, Kelly")}
+      ${sel("sizing_mode", "Comment calculer la taille de chaque trade", s.sizing_mode || "fixed",
+        [{value:"fixed", label:"🟰 Fixe — toujours le même montant USDC"},
+         {value:"percent", label:"% — pourcentage du capital alloué"},
+         {value:"proportional", label:"📏 Proportionnel — copie la proportion du master"},
+         {value:"kelly", label:"🧠 Kelly — formule statistique (avancé)"}],
+        "Détermine combien d'USDC engager à chaque trade copié")}
+      ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000, "Utilisé si mode FIXÉ. Ex: 10 = chaque trade fait 10 USDC")}
+      ${num("percent_per_trade", "% du capital par trade", s.percent_per_trade, 0.5, 0.1, 100, "Utilisé si mode % du capital. Ex: 5 = engage 5% du capital alloué à chaque trade")}
+      ${num("multiplier", "Multiplicateur global", s.multiplier, 0.1, 0.1, 10, "Multiplie le résultat final. 0.5 = moitié, 2 = double. Utile pour ajuster sans changer le mode")}
+      ${num("min_trade_usdc", "Montant minimum (USDC)", s.min_trade_usdc, 0.5, 0, 1000, "Plancher : si la taille calculée est inférieure, le trade est skippé")}
+      ${num("max_trade_usdc", "Montant maximum (USDC)", s.max_trade_usdc, 0.5, 0, 10000, "Plafond : la taille calculée est cappée à cette valeur")}
+      ${num("daily_limit_usdc", "Limite quotidienne (USDC)", s.daily_limit_usdc, 1, 0, 100000, "Total max dépensé par jour, toutes copies confondues. Reset minuit UTC")}
     </div>
 
     <div class="card">
       <div class="card-title">🧠 Smart Analysis V3</div>
-      ${tgl("signal_scoring_enabled", "Scoring activé", "Score 0-100 par signal", s.signal_scoring_enabled)}
-      ${num("min_signal_score", "Score minimum", s.min_signal_score, 5, 0, 100, "Seuls les signaux ≥ sont copiés")}
-      ${tgl("smart_filter_enabled", "Smart filter", null, s.smart_filter_enabled)}
-      ${tgl("skip_coin_flip", "Ignorer les 50/50", null, s.skip_coin_flip)}
-      ${num("min_conviction_pct", "Conviction minimum %", s.min_conviction_pct, 0.5, 0, 100)}
-      ${num("max_price_drift_pct", "Drift prix max %", s.max_price_drift_pct, 0.5, 0, 50)}
+      ${tgl("signal_scoring_enabled", "Scoring 0-100 activé", "Évalue chaque signal sur 6 critères (spread, liquidité, conviction, forme du trader, timing, consensus)", s.signal_scoring_enabled)}
+      ${num("min_signal_score", "Score minimum (0-100)", s.min_signal_score, 5, 0, 100, "Seuls les signaux avec score ≥ ce seuil sont copiés. 40 = équilibré, 65+ = strict")}
+      ${tgl("smart_filter_enabled", "Smart filter avancé", "Active les filtres par-type-de-marché (winrate trader sur cette catégorie, etc.)", s.smart_filter_enabled)}
+      ${tgl("skip_coin_flip", "Ignorer les 50/50", "Skip les marchés où le prix est très proche de 0.50 (pas de conviction)", s.skip_coin_flip)}
+      ${num("min_conviction_pct", "Conviction minimum (%)", s.min_conviction_pct, 0.5, 0, 100, "Taille du trade master / portfolio master. Ex: 2 = le master doit miser ≥ 2% de son portfolio")}
+      ${num("max_price_drift_pct", "Drift prix max (%)", s.max_price_drift_pct, 0.5, 0, 50, "Si le prix actuel a bougé de plus de X% par rapport au prix d'exécution du master, skip")}
+      ${num("min_trader_winrate_for_type", "Win rate min trader / type (%)", s.min_trader_winrate_for_type, 5, 0, 100, "Le master doit avoir ce WR min sur le TYPE du marché (ex: 55% sur Sport)")}
+      ${num("min_trader_trades_for_type", "Min trades trader / type", s.min_trader_trades_for_type, 1, 1, 1000, "Min de trades du master sur ce type pour considérer la stat fiable")}
       <div class="section-title" style="margin-top:16px"><h2>Profils rapides</h2></div>
+      <div class="small" style="margin-bottom:8px">Applique un preset des poids et seuils en 1 clic</div>
       <div class="btn-row cols-3">
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('prudent')">🛡 Prudent</button>
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('balanced')">⚖️ Équilibré</button>
@@ -1077,42 +1084,64 @@ route(/^more\/settings$/, async () => {
 
     <div class="card">
       <div class="card-title">🛡 Stop Loss & Take Profit</div>
-      ${tgl("stop_loss_enabled", "Stop Loss", null, s.stop_loss_enabled)}
-      ${num("stop_loss_pct", "Stop Loss %", s.stop_loss_pct, 1, 1, 100)}
-      ${tgl("take_profit_enabled", "Take Profit", null, s.take_profit_enabled)}
-      ${num("take_profit_pct", "Take Profit %", s.take_profit_pct, 1, 1, 500)}
-      ${tgl("trailing_stop_enabled", "Trailing stop", "SL qui suit le prix", s.trailing_stop_enabled)}
-      ${num("trailing_stop_pct", "Trailing %", s.trailing_stop_pct, 1, 1, 100)}
+      ${tgl("stop_loss_enabled", "Stop Loss", "Vend automatiquement si le prix chute du % défini", s.stop_loss_enabled)}
+      ${num("stop_loss_pct", "Seuil Stop Loss (%)", s.stop_loss_pct, 1, 1, 100, "Ex: 20 = vente si prix d'entrée -20%")}
+      ${tgl("take_profit_enabled", "Take Profit", "Vend automatiquement si le prix grimpe du % défini", s.take_profit_enabled)}
+      ${num("take_profit_pct", "Seuil Take Profit (%)", s.take_profit_pct, 1, 1, 500, "Ex: 50 = vente si prix d'entrée +50%")}
+      ${tgl("trailing_stop_enabled", "Trailing Stop", "Stop qui SUIT le prix vers le haut. Verrouille les gains progressivement.", s.trailing_stop_enabled)}
+      ${num("trailing_stop_pct", "Marge trailing (%)", s.trailing_stop_pct, 1, 1, 100, "Ex: 10 = vente si prix retombe de -10% par rapport au plus haut atteint")}
+    </div>
+
+    <div class="card">
+      <div class="card-title">⏱ Sorties avancées</div>
+      ${tgl("time_exit_enabled", "Sortie temporelle", "Ferme automatiquement la position après X heures, peu importe le prix", s.time_exit_enabled)}
+      ${num("time_exit_hours", "Durée max (heures)", s.time_exit_hours, 1, 1, 720, "Ex: 24 = ferme toute position ouverte depuis ≥ 24h")}
+      ${tgl("scale_out_enabled", "Scale out (TP partiel)", "À l'atteinte du TP : vend X% au lieu de 100%, garde le reste avec SL=entrée", s.scale_out_enabled)}
+      ${num("scale_out_pct", "% à vendre au TP1", s.scale_out_pct, 5, 5, 95, "Ex: 50 = encaisse la moitié au TP, laisse courir l'autre moitié sans risque")}
     </div>
 
     <div class="card">
       <div class="card-title">📊 Risque portefeuille</div>
-      ${num("max_positions", "Max positions ouvertes", s.max_positions, 1, 1, 100)}
-      ${num("max_category_exposure_pct", "Max % / catégorie", s.max_category_exposure_pct, 5, 5, 100)}
-      ${num("max_direction_bias_pct", "Max biais YES/NO %", s.max_direction_bias_pct, 5, 50, 100)}
+      ${num("max_positions", "Max positions ouvertes", s.max_positions, 1, 1, 100, "Au-delà, le bot refuse de prendre une nouvelle position")}
+      ${num("max_category_exposure_pct", "Max exposition / catégorie (%)", s.max_category_exposure_pct, 5, 5, 100, "Ex: 30 = max 30% du capital en Crypto, max 30% en Politics, etc.")}
+      ${num("max_direction_bias_pct", "Max biais directionnel (%)", s.max_direction_bias_pct, 5, 50, 100, "Ex: 70 = bloque si plus de 70% des positions sont du même côté (YES vs NO)")}
+    </div>
+
+    <div class="card">
+      <div class="card-title">🔥 Suivi performance traders</div>
+      ${tgl("auto_pause_cold_traders", "Pause auto traders 'cold'", "Skip les copies si le trader a un win rate sous le seuil sur 7 derniers jours (sécurité)", s.auto_pause_cold_traders)}
+      ${num("cold_trader_threshold", "Seuil 'cold' win rate (%)", s.cold_trader_threshold, 1, 0, 100, "Ex: 40 = un trader avec WR < 40% est considéré cold")}
+      ${num("hot_streak_boost", "Multiplicateur hot streak", s.hot_streak_boost, 0.1, 1, 5, "Ex: 1.5 = booste le sizing de +50% si le trader est en série de wins (≥65% WR récent)")}
     </div>
 
     <div class="card">
       <div class="card-title">⛽ Gas & Timing</div>
-      ${sel("gas_mode", "Vitesse gas", s.gas_mode || "fast",
-        [{value:"normal", label:"🐢 Normal — 30 gwei"},{value:"fast", label:"🚀 Fast — 50 gwei"},{value:"ultra", label:"⚡ Ultra — 100 gwei"},{value:"instant", label:"💎 Instant — 200 gwei"}])}
-      ${num("copy_delay_seconds", "Délai avant copie (sec)", s.copy_delay_seconds, 1, 0, 600)}
-      ${tgl("manual_confirmation", "Confirmation manuelle", "Demander avant gros trades", s.manual_confirmation)}
-      ${num("confirmation_threshold_usdc", "Seuil USDC", s.confirmation_threshold_usdc, 1, 0, 10000)}
+      ${sel("gas_mode", "Vitesse des transactions Polygon", s.gas_mode || "fast",
+        [{value:"normal", label:"🐢 Normal — 30 gwei (~2 sec)"},
+         {value:"fast", label:"🚀 Fast — 50 gwei (~1.5 sec)"},
+         {value:"ultra", label:"⚡ Ultra — 100 gwei (<1 sec)"},
+         {value:"instant", label:"💎 Instant — 200 gwei (max speed)"}],
+        "Plus la vitesse est élevée, plus vous payez de MATIC en gas. Affecte les transferts de fees et les prochaines transactions.")}
+      ${num("copy_delay_seconds", "Délai avant copie (secondes)", s.copy_delay_seconds, 1, 0, 600, "Attendre N secondes avant d'exécuter le trade après détection du master. 0 = immédiat. Utile pour éviter le front-running.")}
+      ${tgl("manual_confirmation", "Demander confirmation manuelle", "Pour les gros trades, vous recevez une notif et devez approuver avant exécution", s.manual_confirmation)}
+      ${num("confirmation_threshold_usdc", "Seuil pour confirmation (USDC)", s.confirmation_threshold_usdc, 1, 0, 10000, "Si le trade dépasse ce montant, demande confirmation. 0 = jamais demander, 50 = demander dès 50 USDC")}
     </div>
 
     <div class="card">
       <div class="card-title">🔔 Notifications</div>
-      ${sel("notification_mode", "Destination", s.notification_mode || "dm",
+      ${sel("notification_mode", "Où recevoir les alertes", s.notification_mode || "dm",
         [{value:"dm", label:"📱 Direct message"},{value:"group", label:"👥 Groupe (topic)"},{value:"both", label:"📨 Les deux"}],
-        "Où recevez les alertes de trades exécutés / SL/TP / erreurs")}
+        "Destination des notifications (trades, SL/TP, erreurs)")}
+      ${tgl("notify_on_buy", "Notifier sur achats", "Recevoir une notif à chaque trade BUY copié", s.notify_on_buy)}
+      ${tgl("notify_on_sell", "Notifier sur ventes", "Recevoir une notif à chaque trade SELL copié", s.notify_on_sell)}
+      ${tgl("notify_on_sl_tp", "Notifier SL/TP/Sortie", "Recevoir une notif quand un Stop Loss, Take Profit, trailing ou time exit se déclenche", s.notify_on_sl_tp)}
     </div>
 
     <div class="card">
-      <div class="card-title">🎯 Stratégies</div>
-      ${num("strategy_trade_fee_rate", "Fee rate", s.strategy_trade_fee_rate, 0.01, 0.01, 0.20, "1-20%")}
-      ${num("strategy_max_trades_per_day", "Max trades/jour", s.strategy_max_trades_per_day, 1, 1, 200)}
-      ${tgl("strategy_is_paused", "Stratégies en pause", null, s.strategy_is_paused)}
+      <div class="card-title">🎯 Stratégies automatisées</div>
+      ${num("strategy_trade_fee_rate", "Frais par trade (taux 0.01-0.20)", s.strategy_trade_fee_rate, 0.01, 0.01, 0.20, "0.01 = 1%, 0.05 = 5%, 0.20 = 20%. Plus c'est élevé, plus tu es prioritaire dans la file d'exécution.")}
+      ${num("strategy_max_trades_per_day", "Max trades par jour", s.strategy_max_trades_per_day, 1, 1, 200, "Nombre max de signaux exécutés par jour, toutes stratégies confondues. Reset minuit UTC.")}
+      ${tgl("strategy_is_paused", "Mettre les stratégies en pause", "Stoppe l'exécution des signaux des stratégies. Les abonnements restent actifs.", s.strategy_is_paused)}
     </div>
 
     <div style="height:20px"></div>

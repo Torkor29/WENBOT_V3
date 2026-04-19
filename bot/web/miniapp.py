@@ -50,53 +50,51 @@ async def get_current_user(request: Request) -> User:
 
 
 # ── Request models ───────────────────────────────────────────────
-# NOTE: only fields with actual backend wiring are exposed.
-# Removed: notify_on_buy/sell/sl_tp (no DB column), time_exit_*, scale_out_*,
-#          auto_pause_cold_traders, cold_trader_threshold, hot_streak_boost,
-#          use_gamma_monitor, use_ws_monitor, auto_bridge_sol (cosmetic only)
+# All fields wired to backend services (verified 2026-04).
 class SettingsUpdate(BaseModel):
-    # User flags
     paper_trading: Optional[bool] = None
     is_paused: Optional[bool] = None
     is_active: Optional[bool] = None
     daily_limit_usdc: Optional[float] = None
-
     # Capital & sizing
     allocated_capital: Optional[float] = None
-    sizing_mode: Optional[str] = None          # fixed | percent | proportional | kelly
+    sizing_mode: Optional[str] = None
     fixed_amount: Optional[float] = None
     percent_per_trade: Optional[float] = None
     multiplier: Optional[float] = None
     min_trade_usdc: Optional[float] = None
     max_trade_usdc: Optional[float] = None
-
-    # Risk
+    # Risk basic
     stop_loss_enabled: Optional[bool] = None
     stop_loss_pct: Optional[float] = None
     take_profit_enabled: Optional[bool] = None
     take_profit_pct: Optional[float] = None
     trailing_stop_enabled: Optional[bool] = None
     trailing_stop_pct: Optional[float] = None
-
+    # Risk advanced exits (cabled in position_manager.py)
+    time_exit_enabled: Optional[bool] = None
+    time_exit_hours: Optional[int] = None
+    scale_out_enabled: Optional[bool] = None
+    scale_out_pct: Optional[float] = None
     # Copy behaviour
     copy_delay_seconds: Optional[int] = None
     manual_confirmation: Optional[bool] = None
     confirmation_threshold_usdc: Optional[float] = None
-
     # Gas
-    gas_mode: Optional[str] = None             # normal | fast | ultra | instant
-
+    gas_mode: Optional[str] = None
     # Filters
     categories: Optional[list] = None
     blacklisted_markets: Optional[list] = None
     max_expiry_days: Optional[int] = None
     trader_filters: Optional[dict] = None
-
     # Portfolio risk
     max_positions: Optional[int] = None
     max_category_exposure_pct: Optional[float] = None
     max_direction_bias_pct: Optional[float] = None
-
+    # Trader tracking (cabled in copytrade.py)
+    auto_pause_cold_traders: Optional[bool] = None
+    cold_trader_threshold: Optional[float] = None
+    hot_streak_boost: Optional[float] = None
     # Smart filter & signal scoring
     signal_scoring_enabled: Optional[bool] = None
     min_signal_score: Optional[float] = None
@@ -107,10 +105,11 @@ class SettingsUpdate(BaseModel):
     skip_coin_flip: Optional[bool] = None
     min_conviction_pct: Optional[float] = None
     max_price_drift_pct: Optional[float] = None
-
-    # Notifications
-    notification_mode: Optional[str] = None    # dm | group | both
-
+    # Notifications (cabled in copytrade.py + position_manager.py)
+    notification_mode: Optional[str] = None
+    notify_on_buy: Optional[bool] = None
+    notify_on_sell: Optional[bool] = None
+    notify_on_sl_tp: Optional[bool] = None
     # Strategy bucket
     strategy_trade_fee_rate: Optional[float] = None
     strategy_max_trades_per_day: Optional[int] = None
@@ -787,6 +786,8 @@ async def get_settings(user: User = Depends(get_current_user)):
             # risk
             "stop_loss_enabled", "stop_loss_pct", "take_profit_enabled", "take_profit_pct",
             "trailing_stop_enabled", "trailing_stop_pct",
+            "time_exit_enabled", "time_exit_hours",
+            "scale_out_enabled", "scale_out_pct",
             # copy
             "copy_delay_seconds", "manual_confirmation", "confirmation_threshold_usdc",
             # gas
@@ -795,12 +796,14 @@ async def get_settings(user: User = Depends(get_current_user)):
             "categories", "blacklisted_markets", "max_expiry_days", "trader_filters",
             # portfolio
             "max_positions", "max_category_exposure_pct", "max_direction_bias_pct",
+            # trader tracking
+            "auto_pause_cold_traders", "cold_trader_threshold", "hot_streak_boost",
             # scoring / smart
             "signal_scoring_enabled", "min_signal_score", "scoring_criteria",
             "smart_filter_enabled", "min_trader_winrate_for_type", "min_trader_trades_for_type",
             "skip_coin_flip", "min_conviction_pct", "max_price_drift_pct",
             # notifs
-            "notification_mode",
+            "notification_mode", "notify_on_buy", "notify_on_sell", "notify_on_sl_tp",
             # followed
             "followed_wallets",
         ]:

@@ -1,0 +1,27 @@
+# Bind Traefik to WireGuard interface only (10.66.66.1)
+# Applied in kube-system BEFORE K3s deploys Traefik
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      spec:
+        loadBalancerIP: "10.1.0.9"
+    ports:
+      web:
+        exposedPort: 80
+      websecure:
+        exposedPort: 443
+    logs:
+      general:
+        level: WARN
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"

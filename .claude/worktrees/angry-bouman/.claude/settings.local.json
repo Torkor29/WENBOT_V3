@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -c \"import telegram; print\\(telegram.__version__\\)\")",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:agentbets.ai)",
+      "Bash(ls \"C:\\\\Users\\\\Julie\\\\OneDrive\\\\Documents\\\\COPYTRADING\"/*.png \"C:\\\\Users\\\\Julie\\\\OneDrive\\\\Documents\\\\COPYTRADING\"/*.jpg \"C:\\\\Users\\\\Julie\\\\OneDrive\\\\Documents\\\\COPYTRADING\"/*.jpeg)",
+      "Bash(python -c \"from bot.handlers.menu import get_menu_handlers, _build_main_menu_content; print\\(''menu.py OK''\\)\")",
+      "Bash(python -m py_compile bot/handlers/menu.py)",
+      "Bash(python -m py_compile bot/handlers/start.py)",
+      "Bash(python -m py_compile bot/handlers/withdraw.py)",
+      "Bash(python -m py_compile bot/handlers/controls.py)",
+      "Bash(python -m py_compile bot/handlers/balance.py)",
+      "Bash(python -m py_compile bot/handlers/bridge.py)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(python -m pytest tests/test_user_service.py tests/test_crypto.py tests/test_models.py -x -q)",
+      "Bash(python -c \"from bot.services.user_service import switch_wallet; print\\(''OK''\\)\")",
+      "Bash(python -c \"from bot.handlers.menu import get_menu_handlers; print\\(len\\(get_menu_handlers\\(\\)\\), ''handlers''\\)\")"
+    ]
+  }
+}

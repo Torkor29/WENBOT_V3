@@ -1,0 +1,41 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Telegram bot
+python-telegram-bot[webhooks]==21.9
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+aiosqlite==0.20.0
+alembic==1.14.1
+
+# Redis
+redis[hiredis]==5.2.1
+
+# Blockchain
+web3==7.6.0
+solana==0.35.0
+
+# Polymarket
+py-clob-client==0.18.0
+
+# Bridge / HTTP
+httpx==0.28.1
+
+# Crypto
+cryptography==44.0.0
+
+# Scheduling
+apscheduler==3.10.4
+
+# Utils
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0

@@ -6,7 +6,18 @@
       "Bash(python -c \"import telegram; print\\(telegram.__version__\\)\")",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:agentbets.ai)"
+      "WebFetch(domain:agentbets.ai)",
+      "Bash(ls \"C:\\\\Users\\\\Julie\\\\OneDrive\\\\Documents\\\\COPYTRADING\"/*.png \"C:\\\\Users\\\\Julie\\\\OneDrive\\\\Documents\\\\COPYTRADING\"/*.jpg \"C:\\\\Users\\\\Julie\\\\OneDrive\\\\Documents\\\\COPYTRADING\"/*.jpeg)",
+      "Bash(python -c \"from bot.handlers.menu import get_menu_handlers, _build_main_menu_content; print\\(''menu.py OK''\\)\")",
+      "Bash(python -m py_compile bot/handlers/menu.py)",
+      "Bash(python -m py_compile bot/handlers/start.py)",
+      "Bash(python -m py_compile bot/handlers/withdraw.py)",
+      "Bash(python -m py_compile bot/handlers/controls.py)",
+      "Bash(python -m py_compile bot/handlers/balance.py)",
+      "Bash(python -m py_compile bot/handlers/bridge.py)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }

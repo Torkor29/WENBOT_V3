@@ -1,0 +1,459 @@
+"""Onboarding handler — /start command."""
+
+import logging
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    CommandHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+from bot.config import settings
+from bot.db.session import async_session
+from bot.services.user_service import get_user_by_telegram_id, create_user, save_wallet
+
+logger = logging.getLogger(__name__)
+
+# Conversation states
+WELCOME, WALLET_CHOICE, WALLET_ADDRESS, PRIVATE_KEY, CONFIRM = range(5)
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point — /start."""
+    # Message d'accueil unique pour tout le monde (nouveaux et anciens),
+    # avec accès au menu principal via un bouton.
+    keyboard = [
+        [InlineKeyboardButton("🏠 Accéder au menu principal", callback_data="onboard_menu_main")],
+        [InlineKeyboardButton("ℹ️ En savoir plus", callback_data="onboard_info")],
+    ]
+
+    welcome_text = (
+        "👋 **Bienvenue sur WENPOLYMARKET**\n\n"
+        "Bot Telegram de **copy-trading Polymarket** : vous suivez automatiquement les "
+        "meilleurs traders depuis un wallet dédié.\n\n"
+        "✨ **Fonctionnalités**\n"
+        "• Copy-trading automatique des traders que vous choisissez\n"
+        "• Wallet Polygon dédié au copy-trading\n"
+        "• Suivi des soldes, positions et historique depuis le menu\n\n"
+        "🔐 **Sécurité**\n"
+        "• Clés privées chiffrées AES-256-GCM\n"
+        "• Jamais stockées ni envoyées en clair\n\n"
+        "Cliquez sur « Accéder au menu principal » pour commencer, "
+        "configurer votre wallet et choisir vos traders à copier."
+    )
+
+    if settings.welcome_banner_url:
+        await update.message.reply_photo(
+            photo=settings.welcome_banner_url,
+            caption=welcome_text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    else:
+        await update.message.reply_text(
+            welcome_text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    return WELCOME
+
+
+async def onboard_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Show more info about the bot."""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🏠 Accéder au menu principal", callback_data="onboard_menu_main"
+            )
+        ],
+    ]
+    await query.message.reply_text(
+        "📖 **Comment ça marche ?**\n\n"
+        "1️⃣ Vous configurez un wallet Polygon (créé par le bot ou le vôtre)\n"
+        "2️⃣ Vous déposez des USDC dessus (carte, exchange ou bridge)\n"
+        "3️⃣ Vous choisissez quels traders copier\n"
+        "4️⃣ Les trades sont copiés automatiquement\n\n"
+        "🔐 **Sécurité :**\n"
+        "• Clé privée chiffrée AES-256-GCM\n"
+        "• Déchiffrée uniquement en mémoire pour signer\n"
+        "• Jamais loguée ni exposée\n",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WELCOME
+
+
+async def onboard_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Begin registration — let user choose wallet creation method."""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🆕 Créer un wallet Polygon", callback_data="onboard_create_wallet"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📩 J'ai déjà un wallet", callback_data="onboard_existing_wallet"
+            )
+        ],
+        [InlineKeyboardButton("⬅️ Annuler", callback_data="onboard_cancel")],
+    ]
+
+    await query.edit_message_text(
+        "🧭 **Configuration du wallet**\n\n"
+        "Le bot a besoin d'un wallet Polygon pour passer des ordres "
+        "sur Polymarket en votre nom. Deux options :\n\n"
+        "🆕 **Créer un wallet** (recommandé si débutant)\n"
+        "→ Le bot génère un nouveau wallet Polygon pour vous.\n"
+        "→ Il sera vide : vous devrez y déposer des USDC ensuite "
+        "(par carte bancaire, depuis un exchange, ou via bridge).\n"
+        "→ Vous n'avez PAS besoin de MetaMask ou autre app.\n\n"
+        "📩 **J'ai déjà un wallet Polygon** (utilisateurs avancés)\n"
+        "→ Vous avez un wallet Polygon (MetaMask, etc.) avec des USDC dessus.\n"
+        "→ Vous fournissez l'adresse + la clé privée (chiffrée immédiatement).\n"
+        "→ Le bot utilise directement les USDC déjà présents.\n"
+        "→ Vous pouvez aussi bridger du SOL/ETH vers ce wallet.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WALLET_CHOICE
+
+
+async def onboard_menu_main(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Afficher le menu principal depuis l'écran d'accueil (nouvel utilisateur).
+
+    Délègue au menu unifié de menu.py pour éviter toute divergence.
+    """
+    from bot.handlers.menu import _build_main_menu_content
+
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if not user:
+            user = await create_user(session, tg_user.id, username=tg_user.username)
+
+        text, keyboard = _build_main_menu_content(tg_user, user)
+
+    await query.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return ConversationHandler.END
+
+
+async def onboard_existing_wallet(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Ask user for an existing wallet address."""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")],
+    ]
+    await query.edit_message_text(
+        "📬 **Étape 1/2 — Adresse Wallet**\n\n"
+        "Envoyez votre adresse wallet **Polygon** (0x...).\n\n"
+        "⚠️ Cette adresse sera utilisée pour le trading sur Polymarket.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return WALLET_ADDRESS
+
+
+async def onboard_create_wallet(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Create a new Polygon wallet for the user and save it."""
+    from web3 import Web3
+
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+
+    # Generate a new wallet locally (no RPC needed)
+    w3 = Web3()
+    account = w3.eth.account.create()
+    wallet_address = account.address
+    private_key = account.key.hex()
+
+    async with async_session() as session:
+        # Si l'utilisateur existe déjà (créé lors de /start ou d'un essai précédent),
+        # on le réutilise pour éviter les doublons.
+        existing = await get_user_by_telegram_id(session, tg_user.id)
+        if existing:
+            user = existing
+        else:
+            user = await create_user(session, tg_user.id, username=tg_user.username)
+        await save_wallet(
+            session,
+            user,
+            wallet_address=wallet_address,
+            private_key=private_key,
+            chain="polygon",
+        )
+        user.wallet_auto_created = True
+        await session.commit()
+
+    # Envoyer l'adresse + la clé une seule fois pour sauvegarde utilisateur
+    keyboard = [
+        [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+    ]
+    await query.edit_message_text(
+        "🎉 **Wallet Polygon dédié créé !**\n\n"
+        f"📬 Adresse :\n`{wallet_address}`\n\n"
+        f"🔑 Clé privée :\n`{private_key}`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔐 **SAUVEGARDEZ CETTE CLÉ MAINTENANT**\n\n"
+        "• Copiez-la dans un **gestionnaire de mots de passe** "
+        "(Bitwarden, 1Password, etc.) ou une **note chiffrée**.\n"
+        "• **Ce message ne sera plus jamais affiché.**\n"
+        "• Sans cette clé, vous ne pourrez pas récupérer "
+        "vos fonds en dehors du bot.\n\n"
+        "🔒 **Sécurité :** La clé est stockée **chiffrée (AES-256-GCM)** "
+        "sur nos serveurs pour signer vos trades automatiquement. "
+        "Elle n'est jamais visible en clair après cet écran.\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "**Prochaines étapes :**\n"
+        "1. « 💳 Déposer » — Alimenter le wallet en USDC\n"
+        "2. « ⚙️ Paramètres » — Choisir vos traders à copier",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+    # Nettoyer la clé en mémoire
+    del private_key
+
+    return ConversationHandler.END
+
+
+async def receive_wallet_address(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Receive and validate wallet address."""
+    address = update.message.text.strip()
+
+    cancel_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")]]
+    )
+
+    # Basic validation
+    if not address.startswith("0x") or len(address) != 42:
+        await update.message.reply_text(
+            "❌ Adresse invalide. Elle doit commencer par `0x` "
+            "et faire 42 caractères.\n\nRéessayez :",
+            parse_mode="Markdown",
+            reply_markup=cancel_kb,
+        )
+        return WALLET_ADDRESS
+
+    # Check hex
+    try:
+        int(address, 16)
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Adresse invalide — caractères non-hexadécimaux détectés.\n\nRéessayez :",
+            reply_markup=cancel_kb,
+        )
+        return WALLET_ADDRESS
+
+    context.user_data["wallet_address"] = address
+
+    await update.message.reply_text(
+        "🔑 **Étape 2/2 — Clé Privée**\n\n"
+        "Envoyez votre clé privée Polygon.\n\n"
+        "🔒 Elle sera **immédiatement chiffrée** (AES-256-GCM) "
+        "et le message sera supprimé.\n\n"
+        "⚠️ Ne partagez JAMAIS votre clé privée ailleurs.",
+        parse_mode="Markdown",
+        reply_markup=cancel_kb,
+    )
+    return PRIVATE_KEY
+
+
+async def receive_private_key(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Receive private key — encrypt immediately, delete message."""
+    private_key = update.message.text.strip()
+    chat = update.effective_chat
+
+    # Delete the message containing the private key IMMEDIATELY
+    try:
+        await update.message.delete()
+    except Exception:
+        pass  # Bot may not have delete permissions
+
+    cancel_kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel")]]
+    )
+
+    # Basic validation (use chat.send_message since original message may be deleted)
+    if len(private_key) < 32:
+        await chat.send_message(
+            "❌ Clé privée trop courte. Réessayez :",
+            reply_markup=cancel_kb,
+        )
+        return PRIVATE_KEY
+
+    context.user_data["private_key"] = private_key
+
+    wallet = context.user_data["wallet_address"]
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Confirmer", callback_data="onboard_confirm"),
+            InlineKeyboardButton("❌ Annuler", callback_data="onboard_cancel"),
+        ]
+    ]
+    await chat.send_message(
+        "📋 **Résumé de l'inscription**\n\n"
+        f"📬 Wallet : `{wallet[:6]}...{wallet[-4:]}`\n"
+        "🔑 Clé privée : ✅ Reçue (sera chiffrée AES-256)\n"
+        "📝 Mode : Paper Trading (défaut)\n"
+        "💸 Frais : 1% par trade copié\n\n"
+        "Confirmer l'inscription ?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return CONFIRM
+
+
+async def onboard_confirm(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Finalize registration — create user, encrypt and save key."""
+    query = update.callback_query
+    await query.answer()
+
+    tg_user = update.effective_user
+    wallet_address = context.user_data.get("wallet_address")
+    private_key = context.user_data.get("private_key")
+
+    if not wallet_address or not private_key:
+        await query.edit_message_text("❌ Erreur — données manquantes. Relancez /start.")
+        return ConversationHandler.END
+
+    async with async_session() as session:
+        # Si l'utilisateur existe déjà, on met simplement à jour / enregistre son wallet.
+        existing = await get_user_by_telegram_id(session, tg_user.id)
+        if existing:
+            user = existing
+        else:
+            user = await create_user(session, tg_user.id, username=tg_user.username)
+
+        await save_wallet(session, user, wallet_address, private_key, chain="polygon")
+        user.wallet_auto_created = False
+        await session.commit()
+
+        keyboard = [
+            [InlineKeyboardButton("🏠 Menu principal", callback_data="menu_back")],
+        ]
+        await query.edit_message_text(
+            "🎉 **Wallet importé avec succès !**\n\n"
+            f"📬 Wallet : `{wallet_address[:6]}...{wallet_address[-4:]}`\n"
+            "🔒 Clé privée : chiffrée AES-256-GCM ✅\n"
+            "📝 Mode : Paper Trading (par défaut)\n\n"
+            "🔐 Votre clé est stockée **chiffrée** et utilisée uniquement "
+            "pour signer vos trades automatiquement. Elle n'est jamais "
+            "visible en clair.\n\n"
+            "**Prochaines étapes :**\n"
+            "1. « 👛 Wallets » — Voir votre wallet et vos soldes\n"
+            "2. « ⚙️ Paramètres » — Choisir quels traders copier",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    # Clear sensitive data from context
+    context.user_data.pop("wallet_address", None)
+    context.user_data.pop("private_key", None)
+
+    return ConversationHandler.END
+
+
+async def onboard_cancel(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    """Cancel registration and return to main menu."""
+    from bot.handlers.menu import _build_main_menu_content
+
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data.pop("wallet_address", None)
+    context.user_data.pop("private_key", None)
+
+    tg_user = update.effective_user
+    async with async_session() as session:
+        user = await get_user_by_telegram_id(session, tg_user.id)
+        if user:
+            text, keyboard = _build_main_menu_content(tg_user, user)
+            await query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Inscription annulée.\n\nVous pouvez relancer /start à tout moment."
+            )
+
+    return ConversationHandler.END
+
+
+def get_start_handler() -> ConversationHandler:
+    """Build the /start conversation handler (écran d'accueil + config wallet)."""
+    return ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start_command),
+            # Permet de lancer "Configurer mon wallet" depuis le menu principal
+            CallbackQueryHandler(onboard_start, pattern="^onboard_start$"),
+        ],
+        states={
+            WELCOME: [
+                CallbackQueryHandler(onboard_menu_main, pattern="^onboard_menu_main$"),
+                CallbackQueryHandler(onboard_info, pattern="^onboard_info$"),
+            ],
+            WALLET_CHOICE: [
+                CallbackQueryHandler(
+                    onboard_existing_wallet, pattern="^onboard_existing_wallet$"
+                ),
+                CallbackQueryHandler(
+                    onboard_create_wallet, pattern="^onboard_create_wallet$"
+                ),
+                CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
+            ],
+            WALLET_ADDRESS: [
+                CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_wallet_address),
+            ],
+            PRIVATE_KEY: [
+                CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_private_key),
+            ],
+            CONFIRM: [
+                CallbackQueryHandler(onboard_confirm, pattern="^onboard_confirm$"),
+                CallbackQueryHandler(onboard_cancel, pattern="^onboard_cancel$"),
+            ],
+        },
+        fallbacks=[CommandHandler("start", start_command)],
+        per_user=True,
+    )
