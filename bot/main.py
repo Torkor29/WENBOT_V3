@@ -487,6 +487,12 @@ async def main() -> None:
     # Give signal scorer access to monitor for consensus scoring
     signal_scorer._monitor = monitor
 
+    # Expose services globally so Mini App endpoints can trigger actions
+    # (e.g. immediate refresh when a trader is added via the UI)
+    from bot.services import _registry as _svc_reg
+    _svc_reg.monitor = monitor
+    _svc_reg.engine = engine
+
     # Callback WebSocket: on each CLOB trade, trigger immediate check
     async def handle_ws_event(evt: RawWsEvent) -> None:
         if evt.type in ("last_trade_price", "trade"):

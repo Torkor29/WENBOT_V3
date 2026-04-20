@@ -549,7 +549,23 @@ async def traders_add(body: TraderAddReq, user: User = Depends(get_current_user)
         wallets.append(w_lower)
         s.followed_wallets = wallets
         await session.commit()
-    return {"ok": True, "count": len(wallets)}
+
+    # 🔧 CRITICAL: Notify the monitor immediately — without this, the bot
+    # waits up to 60s for the next scheduled refresh, missing trades in between.
+    try:
+        from bot.services import _registry as _svc_reg
+        if _svc_reg.monitor is not None:
+            await _svc_reg.monitor.refresh_watched_wallets()
+            logger.info(f"Monitor refreshed after trader add: {w_lower[:10]}...")
+    except Exception as e:
+        logger.warning(f"Could not refresh monitor after add: {e}")
+
+    return {
+        "ok": True,
+        "count": len(wallets),
+        "message": "Trader ajouté. Le bot commencera à copier ses PROCHAINS trades.",
+        "note": "Les trades que ce trader a déjà ouverts ne sont pas rétro-copiés (seules les nouvelles positions déclenchent une copie).",
+    }
 
 
 @router.delete("/copy/traders/{wallet}")

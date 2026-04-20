@@ -857,8 +857,19 @@ route(/^copy\/discover\/(day|week|month|all)$/, async (m) => {
 
 window._follow = async function(wallet, ev) {
   if (ev) ev.stopPropagation();
-  try { await api("/copy/traders/add", {method:"POST", body:{wallet}}); invalidate("copy-"); invalidate("discover-"); toast("Ajouté ✓"); dispatch(); }
-  catch (e) { toast(e.message, "error"); }
+  try {
+    const r = await api("/copy/traders/add", {method:"POST", body:{wallet}});
+    invalidate("copy-"); invalidate("discover-");
+    toast("✓ Trader ajouté");
+    // Show clear confirmation about the "future trades only" behavior
+    await confirmModal(
+      "✓ Trader ajouté",
+      (r.message || "Le bot commencera à copier ses prochains trades.") + "\n\n" +
+      (r.note || "Les trades passés ne sont pas rétro-copiés."),
+      "Compris"
+    );
+    dispatch();
+  } catch (e) { toast(e.message, "error"); }
 };
 
 route(/^copy\/discover\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
@@ -1009,8 +1020,18 @@ route(/^copy\/traders\/add$/, async () => {
   setMainBtn("SUIVRE", async () => {
     const w = document.getElementById("addr").value.trim();
     if (!w) return toast("Adresse requise", "error");
-    try { await api("/copy/traders/add", {method:"POST", body:{wallet: w}}); invalidate("copy-"); toast("Trader ajouté"); go("copy/traders"); }
-    catch (e) { toast(e.message, "error"); }
+    try {
+      const r = await api("/copy/traders/add", {method:"POST", body:{wallet: w}});
+      invalidate("copy-");
+      toast("✓ Trader ajouté");
+      await confirmModal(
+        "✓ Trader ajouté",
+        (r.message || "Le bot commencera à copier ses prochains trades.") + "\n\n" +
+        (r.note || "Les trades passés ne sont pas rétro-copiés."),
+        "Compris"
+      );
+      go("copy/traders");
+    } catch (e) { toast(e.message, "error"); }
   });
 }, {tab: "copy", back: "copy/traders"});
 

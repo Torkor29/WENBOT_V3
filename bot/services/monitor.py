@@ -119,6 +119,19 @@ class MultiMasterMonitor:
                 f"= {len(self._wallet_states)} total"
             )
 
+        # 🔧 CRITICAL FIX: Take initial snapshot for newly added wallets.
+        # Without this, _check_wallet skips them (state.initialized=False),
+        # meaning newly-added traders would NEVER be monitored until bot restart.
+        if added:
+            snapshot_tasks = [
+                self._snapshot_wallet(w, initial=True) for w in added
+            ]
+            await asyncio.gather(*snapshot_tasks, return_exceptions=True)
+            logger.info(
+                f"Initial snapshot taken for {len(added)} newly added wallet(s) "
+                f"— monitoring now active"
+            )
+
     async def _poll_loop(self) -> None:
         """Main polling loop with circuit breaker (H2 FIX)."""
         # Initial snapshot for all wallets
