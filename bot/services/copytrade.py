@@ -78,8 +78,9 @@ class CopyTradeEngine:
     async def handle_signal(self, signal: TradeSignal) -> None:
         """Process a trade signal — only for followers of signal.master_wallet."""
         logger.info(
-            f"Processing signal from {signal.master_wallet[:10]}...: "
-            f"{signal.side} {signal.token_id[:12]}..."
+            f"📡 SIGNAL from {signal.master_wallet[:10]}...: "
+            f"{signal.side} size={signal.size:.2f} price={signal.price:.4f} "
+            f"'{(signal.market_question or signal.market_id)[:50]}'"
         )
 
         async with async_session() as session:
@@ -88,13 +89,13 @@ class CopyTradeEngine:
             )
 
         if not followers:
-            logger.debug(
-                f"No followers for wallet {signal.master_wallet[:10]}... — skipping"
+            logger.info(
+                f"⚠ No followers for wallet {signal.master_wallet[:10]}... — signal ignored"
             )
             return
 
         logger.info(
-            f"{len(followers)} follower(s) for {signal.master_wallet[:10]}..."
+            f"→ {len(followers)} follower(s) matched for {signal.master_wallet[:10]}..."
         )
 
         # ── V3: Score signal ONCE before processing followers ──
