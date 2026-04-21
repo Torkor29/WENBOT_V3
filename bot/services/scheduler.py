@@ -84,23 +84,58 @@ async def settle_trades(bot=None, topic_router=None, trader_tracker=None) -> Non
                 winning_outcome = resolution.get("winning_outcome", "")
 
                 for trade in trades:
-                    shares = trade.shares or (
+                    # ───────────────────────────────────────────────
+                    # BUG FIX: account for partial SELLs that happened
+                    # AFTER this BUY. If user sold part of the position
+                    # already, only the REMAINING shares get the payout.
+                    # ───────────────────────────────────────────────
+                    from sqlalchemy import func as _func
+                    from bot.models.trade import Trade as _T
+                    sells_sum = await session.scalar(
+                        select(_func.coalesce(_func.sum(_T.shares), 0.0)).where(
+                            _T.user_id == trade.user_id,
+                            _T.token_id == trade.token_id,
+                            _T.side == TradeSide.SELL,
+                            _T.status == TradeStatus.FILLED,
+                            _T.created_at >= trade.created_at,
+                        )
+                    )
+                    sold_shares = float(sells_sum or 0)
+
+                    original_shares = trade.shares or (
                         trade.net_amount_usdc / trade.price
                         if trade.price > 0 else 0
                     )
-                    invested = trade.net_amount_usdc
+                    remaining_shares = max(0.0, float(original_shares) - sold_shares)
+
+                    # gross_amount = total USDC cost including platform fee
+                    # (net_amount was the fee-net amount sent to the CLOB — using
+                    # gross for invested gives the true "total cash out" cost)
+                    total_invested_gross = trade.gross_amount_usdc or trade.net_amount_usdc
+                    # Pro-rate invested to the remaining shares
+                    if original_shares > 0:
+                        invested = float(total_invested_gross) * (remaining_shares / float(original_shares))
+                    else:
+                        invested = 0.0
 
                     won = trade.token_id == winning_token
-                    if won:
-                        payout = shares * 1.0
+                    if remaining_shares <= 0:
+                        # Whole position was sold before resolution — PnL already
+                        # realized via SELL trades. Just mark this BUY as settled.
+                        payout = 0.0
+                        pnl = 0.0  # do not double-count
+                    elif won:
+                        payout = remaining_shares * 1.0
                         pnl = payout - invested
                     else:
                         payout = 0.0
                         pnl = -invested
 
                     trade.is_settled = True
-                    trade.settlement_pnl = pnl
+                    trade.settlement_pnl = round(pnl, 4)
                     trade.market_outcome = winning_outcome
+                    # Update effective shares to remaining (for accurate reporting)
+                    shares = remaining_shares
 
                     # Credit payout to paper balance
                     if trade.is_paper:
