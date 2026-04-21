@@ -497,16 +497,42 @@ body {
 .input {
   width: 100%;
   padding: 13px 14px;
-  background: var(--card-bg);
-  border: 1px solid transparent;
+  background: rgba(255,255,255,0.03);
+  border: 1.5px solid rgba(255,255,255,0.12);
   border-radius: var(--btn-radius);
   color: var(--tg-text);
   font-size: 15px;
   font-family: inherit;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
-.input:focus { outline: none; border-color: var(--tg-btn); }
+.input:hover { border-color: rgba(255,255,255,0.22); }
+.input:focus {
+  outline: none;
+  border-color: var(--tg-btn);
+  background: rgba(94,170,239,0.06);
+  box-shadow: 0 0 0 3px rgba(94,170,239,0.12);
+}
+
+.label .required-star { color: var(--red); margin-left: 4px; font-weight: 700; }
+
+.label-required::after {
+  content: " *";
+  color: var(--red);
+  font-weight: 700;
+}
+
+@media (prefers-color-scheme: light) {
+  .input {
+    background: rgba(0,0,0,0.02);
+    border-color: rgba(0,0,0,0.15);
+  }
+  .input:hover { border-color: rgba(0,0,0,0.28); }
+  .input:focus {
+    background: rgba(0,122,255,0.04);
+    box-shadow: 0 0 0 3px rgba(0,122,255,0.10);
+  }
+}
 
 .input-mono { font-family: "SF Mono", monospace; font-size: 13px; }
 textarea.input { resize: vertical; min-height: 70px; }

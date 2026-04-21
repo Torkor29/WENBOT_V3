@@ -1397,13 +1397,13 @@ route(/^more\/settings$/, async () => {
       <div><div class="toggle-label">${label}</div>${sub ? `<div class="toggle-sub">${sub}</div>` : ""}</div>
       <div class="toggle"><input type="checkbox" data-key="${key}" ${val?"checked":""}><span class="slider"></span></div>
     </label>`;
-  const num = (key, label, val, step=1, min=0, max=1000, hint) => `
-    <div class="form-row"><label class="label">${label}</label>
+  const num = (key, label, val, step=1, min=0, max=1000, hint, required=false) => `
+    <div class="form-row"><label class="label ${required?'label-required':''}">${label}</label>
       <input class="input" type="number" data-key="${key}" value="${val ?? ""}" step="${step}" min="${min}" max="${max}">
       ${hint ? `<div class="input-hint">${hint}</div>` : ""}
     </div>`;
-  const sel = (key, label, val, options, hint) => `
-    <div class="form-row"><label class="label">${label}</label>
+  const sel = (key, label, val, options, hint, required=false) => `
+    <div class="form-row"><label class="label ${required?'label-required':''}">${label}</label>
       <select class="input" data-key="${key}">
         ${options.map(o => { const v=typeof o==='object'?o.value:o; const t=typeof o==='object'?o.label:o; return `<option value="${v}" ${v===val?"selected":""}>${t}</option>`; }).join("")}
       </select>
@@ -1421,8 +1421,10 @@ route(/^more\/settings$/, async () => {
     <div class="page-title">Réglages</div>
 
     <div class="alert info" style="margin-bottom:14px">
-      <h4>💡 Astuce</h4>
-      <p>Chaque paramètre a une <b>valeur recommandée</b> indiquée. Si vous débutez, gardez les défauts et utilisez un des <b>3 profils rapides</b> Smart Analysis (Prudent / Équilibré / Agressif) pour tout régler en 1 clic.</p>
+      <h4>💡 Comment ça marche</h4>
+      <p>Chaque paramètre a une <b>valeur recommandée</b> indiquée.<br>
+      Les champs marqués d'un <b style="color:var(--red)">*</b> sont <b>obligatoires</b> pour que le bot fonctionne.<br>
+      Si vous débutez → gardez les défauts et utilisez un des <b>3 profils rapides</b> Smart Analysis.</p>
     </div>
 
     <div class="card">
@@ -1439,25 +1441,25 @@ route(/^more\/settings$/, async () => {
     <div class="card">
       <div class="card-title">💰 Capital & taille des trades</div>
       ${num("allocated_capital", "Capital alloué (USDC)", s.allocated_capital, 10, 10, 100000,
-        hint("10% de votre capital total", "Mettez ici juste la somme que vous acceptez de perdre en totalité, pas tout votre USDC."))}
+        hint("10% de votre capital total", "Mettez ici juste la somme que vous acceptez de perdre en totalité, pas tout votre USDC."), true)}
       ${sel("sizing_mode", "Mode de sizing", s.sizing_mode || "fixed",
         [{value:"fixed", label:"🟰 Fixe — toujours le même montant"},
          {value:"percent", label:"% — % du capital alloué"},
          {value:"proportional", label:"📏 Proportionnel — copie la proportion du master"},
          {value:"kelly", label:"🧠 Kelly — formule mathématique (avancé)"}],
-        hint("Fixe pour débuter", "Fixe = prévisible. Proportionnel = on mime vraiment le master mais tailles variables. Kelly = rareté mathématique."))}
+        hint("Fixe pour débuter", "Fixe = prévisible. Proportionnel = on mime vraiment le master mais tailles variables. Kelly = rareté mathématique."), true)}
       ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000,
-        hint("5-10 USDC pour débuter", "Débutant → 2-5. Confiant → 10-50. Chaque trade fera ce montant précis."))}
+        hint("5-10 USDC pour débuter", "Requis si mode FIXE. Débutant → 2-5. Confiant → 10-50. Chaque trade fera ce montant précis."), true)}
       ${num("percent_per_trade", "% du capital par trade", s.percent_per_trade, 0.5, 0.1, 100,
-        hint("2-5%", "Augmentez si peu de traders suivis (concentré). Diminuez si beaucoup (risque dispersé)."))}
+        hint("2-5%", "Requis si mode PERCENT. Augmentez si peu de traders suivis (concentré). Diminuez si beaucoup (risque dispersé)."))}
       ${num("multiplier", "Multiplicateur global", s.multiplier, 0.1, 0.1, 10,
         hint("1.0 (neutre)", "0.5 = trades 2× plus petits. 2.0 = 2× plus gros. Pour ajuster vite sans changer le mode."))}
       ${num("min_trade_usdc", "Montant minimum (USDC)", s.min_trade_usdc, 0.5, 0, 1000,
         hint("1 USDC", "Plus haut → skip les micro-trades. Polymarket a un min technique de 1 USDC par ordre."))}
       ${num("max_trade_usdc", "Montant maximum (USDC)", s.max_trade_usdc, 0.5, 0, 10000,
-        hint("10% de votre capital", "Plus bas → protection contre les gros trades du master. Plus haut → moins de limitation."))}
+        hint("10% de votre capital", "Plus bas → protection contre les gros trades du master. Plus haut → moins de limitation."), true)}
       ${num("daily_limit_usdc", "Limite quotidienne (USDC)", s.daily_limit_usdc, 1, 0, 100000,
-        hint("20-30% de votre capital", "Protège des journées perdantes en série. Reset minuit UTC."))}
+        hint("20-30% de votre capital", "Protège des journées perdantes en série. Reset minuit UTC."), true)}
     </div>
 
     <div class="card">
@@ -1475,14 +1477,23 @@ route(/^more\/settings$/, async () => {
         hint("55%", "Exige que le master ait > X% WR sur ce TYPE de marché. 50 = permissif, 65+ = trader expert."))}
       ${num("min_trader_trades_for_type", "Min trades trader / type", s.min_trader_trades_for_type, 1, 1, 1000,
         hint("10", "Minimum d'historique pour qu'une stat WR soit fiable. Augmentez si vous voulez des traders prouvés (30+)."))}
-      <div class="section-title" style="margin-top:16px"><h2>Profils rapides</h2></div>
-      <div class="small" style="margin-bottom:8px">En 1 clic, applique un preset cohérent de poids + seuils</div>
+      <div class="section-title" style="margin-top:16px"><h2>🎯 Profils rapides (raccourci)</h2></div>
+      <div class="alert info" style="margin-bottom:10px;padding:10px 12px">
+        <p style="margin:0;font-size:13px"><b>Comment ça fonctionne :</b><br>
+        • Cliquer un profil <b>remplit les 8 champs ci-dessus</b> avec un preset cohérent.<br>
+        • Vous pouvez ensuite <b>ajuster individuellement</b> n'importe quel champ.<br>
+        • Il n'y a <b>pas de "profil actif" stocké</b> — seules les valeurs comptent. C'est juste un raccourci pour éviter de régler 8 champs un par un.</p>
+      </div>
       <div class="btn-row cols-3">
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('prudent')">🛡 Prudent</button>
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('balanced')">⚖️ Équilibré</button>
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('aggressive')">⚡ Agressif</button>
       </div>
-      <div class="small" style="margin-top:8px"><b>Prudent</b> : score min 65, tous critères ON, skip coin-flip. <b>Équilibré</b> : score min 40, tous ON, recommandé. <b>Agressif</b> : score min 20, désactive spread+timing, mise sur conviction+forme trader.</div>
+      <div class="small" style="margin-top:10px">
+        <b>🛡 Prudent</b> : score min 65, conviction 5%, drift max 3%, skip coin-flip. Qualité &gt; quantité. Peu de trades mais bonnes stats.<br>
+        <b>⚖️ Équilibré</b> : score min 40, conviction 2%, drift max 5%. Recommandé par défaut.<br>
+        <b>⚡ Agressif</b> : score min 20, spread + timing désactivés, mise tout sur conviction + forme du trader. Plus de trades, plus de variance.
+      </div>
     </div>
 
     <div class="card">
