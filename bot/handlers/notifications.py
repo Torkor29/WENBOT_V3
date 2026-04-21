@@ -24,8 +24,9 @@ def format_trade_notification(
     tp_price: float = 0.0,
 ) -> str:
     """Notification de trade copié — format compact et visuel."""
-    side_emoji = "🟢" if trade.side == TradeSide.BUY else "🔴"
-    side_label = "YES" if trade.side == TradeSide.BUY else "NO"
+    is_buy = trade.side == TradeSide.BUY
+    side_emoji = "🟢" if is_buy else "🔴"
+    side_label = "ACHAT" if is_buy else "VENTE"
     question = trade.market_question or trade.market_id[:30]
     mode = "📝 PAPER" if trade.is_paper else "💵 LIVE"
 

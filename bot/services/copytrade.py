@@ -357,7 +357,8 @@ class CopyTradeEngine:
                 logger.info(f"[{tg_id}] 💰 Sized at {gross_amount:.2f} USDC")
 
                 # C2 FIX: Atomic daily limit check with row-level lock
-                if not is_paper:
+                # Daily spend limit only applies to BUY (SELL produces USDC, never spends)
+                if not is_paper and signal.side == "BUY":
                     from sqlalchemy import select, text as sa_text
                     locked_row = await session.execute(
                         select(User).where(User.id == user.id).with_for_update()
@@ -421,7 +422,9 @@ class CopyTradeEngine:
                     logger.error(f"Fee calculation error: {e}")
                     return
 
-                if self._needs_confirmation(user_settings, gross_amount):
+                # Confirmation gate only applies to BUY (entries).
+                # SELL = exiting exposure — never block, to avoid price slippage.
+                if signal.side == "BUY" and self._needs_confirmation(user_settings, gross_amount):
                     reason = (
                         "Confirmation manuelle activée"
                         if user_settings.manual_confirmation
@@ -466,7 +469,6 @@ class CopyTradeEngine:
                 if is_paper:
                     shares = fee_result.net_amount / signal.price if signal.price > 0 else 0
                     trade.shares = shares
-                    trade.status = TradeStatus.FILLED
                     trade.tx_hash = "paper_trade_simulated"
                     if signal.side == "BUY":
                         # C1 FIX: Reject if paper balance insufficient (no clamping)
@@ -481,10 +483,51 @@ class CopyTradeEngine:
                             )
                             return
                         user.paper_balance -= fee_result.gross_amount
+                        trade.status = TradeStatus.FILLED
                     else:
+                        # Validate: can't sell more shares than held in paper
+                        from sqlalchemy import select as _sel, func as _fn
+                        bought = await session.scalar(
+                            _sel(_fn.coalesce(_fn.sum(Trade.shares), 0.0)).where(
+                                Trade.user_id == user.id,
+                                Trade.token_id == signal.token_id,
+                                Trade.is_paper == True,  # noqa: E712
+                                Trade.status == TradeStatus.FILLED,
+                                Trade.side == TradeSide.BUY,
+                                Trade.id != trade.id,
+                            )
+                        ) or 0.0
+                        sold = await session.scalar(
+                            _sel(_fn.coalesce(_fn.sum(Trade.shares), 0.0)).where(
+                                Trade.user_id == user.id,
+                                Trade.token_id == signal.token_id,
+                                Trade.is_paper == True,  # noqa: E712
+                                Trade.status == TradeStatus.FILLED,
+                                Trade.side == TradeSide.SELL,
+                                Trade.id != trade.id,
+                            )
+                        ) or 0.0
+                        held = float(bought) - float(sold)
+                        if shares > held + 1e-6:
+                            trade.status = TradeStatus.FAILED
+                            trade.error_message = (
+                                f"Pas assez de shares en paper ({held:.2f} détenus, "
+                                f"{shares:.2f} requis pour vendre)"
+                            )
+                            await session.commit()
+                            await self._notify_error(
+                                user, signal,
+                                f"Pas assez de shares en paper pour vendre : "
+                                f"{held:.2f} détenus, {shares:.2f} requis.",
+                            )
+                            return
                         # Credit paper balance on sell (proceeds = shares × price)
                         proceeds = fee_result.net_amount  # net after fee
                         user.paper_balance += proceeds
+                        trade.status = TradeStatus.FILLED
+                        # SELL realizes the position — settle immediately
+                        trade.is_settled = True
+                        trade.settlement_pnl = 0.0
                 else:
                     try:
                         # For SELL, the CLOB expects amount in shares, not USDC.
@@ -506,6 +549,11 @@ class CopyTradeEngine:
                             trade.shares = order_result.filled_size
                             trade.status = TradeStatus.FILLED
                             trade.tx_hash = order_result.order_id
+                            # SELL realizes the position — settle immediately
+                            # so the scheduler's market-resolution logic skips it.
+                            if signal.side == "SELL":
+                                trade.is_settled = True
+                                trade.settlement_pnl = 0.0
                         else:
                             trade.status = TradeStatus.FAILED
                             trade.error_message = order_result.error
@@ -574,8 +622,9 @@ class CopyTradeEngine:
                 elapsed = time.monotonic() - start_time
                 trade.execution_time_ms = int(elapsed * 1000)
                 trade.executed_at = datetime.utcnow()
-                # Only count daily spending for LIVE trades (paper has no limit)
-                if not is_paper:
+                # Only count daily spending for LIVE BUY trades
+                # (paper has no limit; SELL produces USDC and doesn't "spend")
+                if not is_paper and signal.side == "BUY":
                     user.daily_spent_usdc += fee_result.gross_amount
                 await session.commit()
 
@@ -625,6 +674,53 @@ class CopyTradeEngine:
                         )
                     except Exception as e:
                         logger.warning("Failed to register position for monitoring: %s", e)
+
+                # ── SELL: close matching open ActivePosition(s) ──
+                # When master exits, the follower's SELL decrements or closes
+                # the tracked position so SL/TP monitoring stops.
+                if (
+                    signal.side == "SELL"
+                    and trade.status == TradeStatus.FILLED
+                ):
+                    try:
+                        from bot.models.active_position import ActivePosition
+                        from bot.models.base import utcnow
+                        from sqlalchemy import select as _sel
+
+                        sold_shares = float(trade.shares or 0)
+                        open_rows = await session.execute(
+                            _sel(ActivePosition).where(
+                                ActivePosition.user_id == user.id,
+                                ActivePosition.token_id == signal.token_id,
+                                ActivePosition.is_closed == False,  # noqa: E712
+                            ).order_by(ActivePosition.opened_at)
+                        )
+                        open_positions = list(open_rows.scalars().all())
+                        remaining = sold_shares
+                        for pos in open_positions:
+                            if remaining <= 1e-6:
+                                break
+                            if pos.shares <= remaining + 1e-6:
+                                # Fully close this position
+                                remaining -= pos.shares
+                                pos.is_closed = True
+                                pos.close_reason = "manual"
+                                pos.close_price = signal.price
+                                pos.closed_at = utcnow()
+                                if pos.entry_price > 0:
+                                    pos.pnl_pct = round(
+                                        ((signal.price - pos.entry_price)
+                                         / pos.entry_price) * 100, 2
+                                    )
+                            else:
+                                # Partial close: decrement shares
+                                pos.shares = round(pos.shares - remaining, 6)
+                                remaining = 0
+                        await session.commit()
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to close ActivePosition on SELL: %s", e
+                        )
 
                 logger.info(
                     f"Trade copied for user {user.telegram_id}: "

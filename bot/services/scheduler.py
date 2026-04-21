@@ -7,7 +7,7 @@ from sqlalchemy import update, select
 
 from bot.db.session import async_session
 from bot.models.user import User
-from bot.models.trade import Trade, TradeStatus
+from bot.models.trade import Trade, TradeStatus, TradeSide
 from bot.services.otp import otp_service
 
 logger = logging.getLogger(__name__)
@@ -45,11 +45,14 @@ async def settle_trades(bot=None, topic_router=None, trader_tracker=None) -> Non
 
     try:
         async with async_session() as session:
-            # Find ALL unsettled trades (paper + live), regardless of side
+            # Settle only BUY trades at market resolution.
+            # SELL realizes its position at fill time (is_settled=True set there),
+            # so market-resolution PnL does not apply — otherwise we'd double-count.
             result = await session.execute(
                 select(Trade).where(
                     Trade.is_settled == False,  # noqa: E712
                     Trade.status == TradeStatus.FILLED,
+                    Trade.side == TradeSide.BUY,
                 )
             )
             unsettled = list(result.scalars().all())

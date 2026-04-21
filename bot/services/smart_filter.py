@@ -170,7 +170,11 @@ class SmartFilter:
             return None
 
         try:
-            current_price = await self._pm.get_price(signal.token_id, signal.side)
+            # Drift is measured against the master's observed price (mid/current).
+            # Use a consistent side for both sides of the comparison — otherwise
+            # BUY-side (ask) vs SELL-side (bid) creates artificial drift equal
+            # to the spread. get_price() tries midpoint first, which is symmetric.
+            current_price = await self._pm.get_price(signal.token_id, "BUY")
 
             if current_price <= 0 or signal.price <= 0:
                 return None
