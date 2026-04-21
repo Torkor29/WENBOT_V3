@@ -765,15 +765,15 @@ route(/^copy\/traders$/, async () => {
           {label:"🔍 Découvrir les pépites", onclick:"go('copy/discover')"})
       : `<div class="card card-flush"><div class="list">
           ${traders.traders.map(t => `
-            <div class="list-item" onclick="go('copy/trader/${t.wallet}')">
-              <div class="avatar">${t.wallet_short.slice(2,4).toUpperCase()}</div>
-              <div class="list-body">
+            <div class="list-item">
+              <div class="avatar" onclick="go('copy/trader/${t.wallet}')" style="cursor:pointer">${t.wallet_short.slice(2,4).toUpperCase()}</div>
+              <div class="list-body" onclick="go('copy/trader/${t.wallet}')" style="cursor:pointer">
                 <div class="list-title mono">${t.wallet_short}</div>
                 <div class="list-sub">${t.trade_count} trades · ${fmtUsd(t.volume)}</div>
               </div>
-              <div class="list-right">
+              <div class="list-right" style="display:flex;align-items:center;gap:8px">
                 <div class="${pnlClass(t.pnl)}" style="font-weight:600">${pnlSign(t.pnl)}</div>
-                <div class="list-chevron">›</div>
+                <button class="btn btn-danger btn-icon" onclick="window._trUnfollow('${t.wallet}')" title="Ne plus suivre" style="flex-shrink:0">🗑</button>
               </div>
             </div>`).join("")}
         </div></div>
