@@ -1065,11 +1065,24 @@ route(/^copy\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
       {value: d.wins + "/" + d.losses, label: "W/L"},
       {value: fmtPct(d.win_rate), label: "Win rate"},
     ], 4)}
+    <div class="small" style="text-align:center;margin:-6px 0 14px;opacity:0.7">
+      ℹ Stats basées <b>uniquement</b> sur vos trades copiés de ce trader (pas sur son activité globale).
+    </div>
+
+    <!-- Générer un rapport pour ce trader -->
+    <div class="section">
+      <button class="btn btn-primary" onclick="window._reportForTrader('${wallet}')">
+        📊 Faire un rapport de ce trader
+      </button>
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px" onclick="window._reportForTraderMulti('${wallet}')">
+        ➕ Rapport multi-traders (ajouter d'autres)
+      </button>
+    </div>
 
     <!-- Marchés actifs sur Polymarket (live) -->
     <div class="section">
       ${sectionTitle("📊 Marchés actifs sur Polymarket", {label:"Actualiser", onclick:"window._loadTraderMarkets('"+wallet+"')"})}
-      <div class="small" style="margin-bottom:8px">Positions ouvertes du trader. Bloquez celles que vous ne voulez pas suivre.</div>
+      <div class="small" style="margin-bottom:8px">Positions du trader triées du plus récent au plus ancien. Bloquez celles que vous ne voulez pas suivre.</div>
       <div id="trader-markets-card"><div class="loading"><div class="spinner"></div>Chargement marchés…</div></div>
     </div>
 
@@ -1135,12 +1148,15 @@ window._loadTraderMarkets = async function(wallet) {
     el.innerHTML = `<div class="card card-flush"><div class="list">${d.markets.map(mk => {
       const mid = (mk.market_id || mk.market_question || "").toLowerCase();
       const isBlocked = blSet.has(mid);
+      const actTs = mk.last_activity_ts || 0;
+      const actLabel = actTs > 0 ? timeAgo(new Date(actTs * 1000).toISOString()) : "—";
       return `
         <div class="list-item">
           <div class="list-icon">${mk.pnl > 0 ? '🟢' : mk.pnl < 0 ? '🔴' : '⚪'}</div>
           <div class="list-body">
             <div class="list-title">${esc(mk.market_question)}</div>
             <div class="list-sub">${esc(mk.outcome)} @ ${mk.entry_price?.toFixed(4) || '?'} → ${mk.current_price?.toFixed(4) || '?'} · ${fmtUsd(mk.current_value || 0)}</div>
+            <div class="list-sub" style="opacity:0.6">🕐 Dernière activité : ${actLabel}</div>
           </div>
           <div class="list-right">
             ${isBlocked
@@ -1182,6 +1198,67 @@ window._trUnfollow = async function(wallet) {
   if (!ok) return;
   await api("/copy/traders/" + wallet, {method:"DELETE"});
   invalidate("copy-"); toast("Trader retiré"); go("copy/traders");
+};
+
+/* Rapport pré-configuré : UN seul trader */
+window._reportForTrader = function(wallet) {
+  REPORTS_STATE.traders_selected.clear();
+  REPORTS_STATE.traders_selected.add(wallet.toLowerCase());
+  toast("📊 Rapport configuré pour " + shortAddr(wallet));
+  go("more/reports/traders");
+};
+
+/* Rapport multi-traders : pré-sélectionne ce trader + ouvre une modale pour cocher les autres */
+window._reportForTraderMulti = async function(wallet) {
+  REPORTS_STATE.traders_selected.clear();
+  REPORTS_STATE.traders_selected.add(wallet.toLowerCase());
+
+  const t = await api("/copy/traders");
+  const others = (t.traders || []).filter(x => x.wallet.toLowerCase() !== wallet.toLowerCase());
+
+  if (others.length === 0) {
+    toast("Aucun autre trader suivi — rapport sur celui-ci");
+    go("more/reports/traders");
+    return;
+  }
+
+  const bd = document.createElement("div");
+  bd.className = "sheet-backdrop";
+  bd.innerHTML = `
+    <div class="sheet">
+      <h3>Rapport multi-traders</h3>
+      <div class="sheet-sub">Cochez les traders à inclure dans le rapport (${shortAddr(wallet)} est déjà pré-sélectionné).</div>
+      <div class="form-row" style="max-height:50vh;overflow-y:auto">
+        <label class="toggle-row" style="opacity:0.6">
+          <div>
+            <div class="toggle-label mono">${shortAddr(wallet)}</div>
+            <div class="toggle-sub">Trader principal (toujours inclus)</div>
+          </div>
+          <div class="toggle"><input type="checkbox" checked disabled><span class="slider"></span></div>
+        </label>
+        ${others.map(o => `
+          <label class="toggle-row" style="cursor:pointer">
+            <div>
+              <div class="toggle-label mono">${o.wallet_short}</div>
+              <div class="toggle-sub">${o.trade_count} trades · ${pnlSign(o.pnl)} PnL</div>
+            </div>
+            <div class="toggle"><input type="checkbox" data-tr-multi="${o.wallet.toLowerCase()}"><span class="slider"></span></div>
+          </label>`).join("")}
+      </div>
+      <button class="btn btn-primary" id="go-report">📊 Générer le rapport</button>
+      <button class="btn btn-ghost" id="close" style="margin-top:8px">Annuler</button>
+    </div>`;
+  document.body.appendChild(bd);
+  bd.addEventListener("click", e => { if (e.target === bd) bd.remove(); });
+  bd.querySelector("#close").onclick = () => bd.remove();
+  bd.querySelector("#go-report").onclick = () => {
+    bd.querySelectorAll("[data-tr-multi]:checked").forEach(el => {
+      REPORTS_STATE.traders_selected.add(el.dataset.trMulti);
+    });
+    bd.remove();
+    toast(`📊 Rapport sur ${REPORTS_STATE.traders_selected.size} trader(s)`);
+    go("more/reports/traders");
+  };
 };
 
 window._editTraderFilters = async function(wallet) {

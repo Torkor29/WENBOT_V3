@@ -1,5 +1,6 @@
 """Telegram Mini App — FastAPI router with all API endpoints."""
 
+import asyncio
 import json as _json
 import logging
 import re as _re
@@ -1763,7 +1764,11 @@ async def _do_discover_top_traders(period: str, limit: int, user: User) -> dict:
 
 @router.get("/discover/trader/{wallet}/markets")
 async def discover_trader_markets(wallet: str, user: User = Depends(get_current_user)):
-    """Marchés récents d'un trader (positions ouvertes sur Polymarket)."""
+    """Marchés récents d'un trader (positions ouvertes sur Polymarket).
+
+    Trié par activité la plus récente DESC — on fetch en parallèle positions + trades
+    récents, on mappe les timestamps par conditionId et on trie par `last_activity_ts`.
+    """
     wallet = wallet.lower().strip()
     if not _is_valid_address(wallet):
         raise HTTPException(400, "Adresse invalide")
@@ -1771,13 +1776,44 @@ async def discover_trader_markets(wallet: str, user: User = Depends(get_current_
     err: Optional[str] = None
     try:
         async with httpx.AsyncClient(timeout=8) as client:
-            r = await client.get("https://data-api.polymarket.com/positions",
-                                 params={"user": wallet, "limit": 25, "sortBy": "CURRENT", "sortDirection": "DESC"})
-            if r.status_code == 200:
-                data = r.json()
+            # Parallèle : positions (état courant) + activity (timestamps)
+            pos_task = client.get(
+                "https://data-api.polymarket.com/positions",
+                params={"user": wallet, "limit": 25, "sortBy": "CURRENT", "sortDirection": "DESC"},
+            )
+            act_task = client.get(
+                "https://data-api.polymarket.com/activity",
+                params={"user": wallet, "limit": 200, "type": "TRADE"},
+            )
+            r_pos, r_act = await asyncio.gather(pos_task, act_task, return_exceptions=True)
+
+            # Map conditionId → timestamp le plus récent (secondes)
+            last_ts: dict[str, int] = {}
+            if not isinstance(r_act, Exception) and getattr(r_act, "status_code", 0) == 200:
+                try:
+                    acts = r_act.json() or []
+                    for a in acts if isinstance(acts, list) else []:
+                        cid = (a.get("conditionId") or "").lower()
+                        if not cid:
+                            continue
+                        raw_ts = int(a.get("timestamp") or 0)
+                        # Normaliser : ms → s
+                        ts = raw_ts // 1000 if raw_ts > 1_000_000_000_000 else raw_ts
+                        if ts > last_ts.get(cid, 0):
+                            last_ts[cid] = ts
+                except Exception:
+                    pass
+
+            if isinstance(r_pos, Exception):
+                err = str(r_pos)
+            elif r_pos.status_code == 200:
+                data = r_pos.json()
                 items = data if isinstance(data, list) else []
                 for p in items[:25]:
+                    cid = (p.get("conditionId") or "").lower()
                     markets.append({
+                        "market_id": cid,  # sert d'ID de blocage
+                        "condition_id": cid,
                         "market_question": p.get("title") or p.get("question") or "",
                         "outcome": p.get("outcome") or "",
                         "size": float(p.get("size") or 0),
@@ -1786,9 +1822,12 @@ async def discover_trader_markets(wallet: str, user: User = Depends(get_current_
                         "pnl": round(float(p.get("realizedPnl") or 0) + float(p.get("cashPnl") or 0), 2),
                         "initial_value": round(float(p.get("initialValue") or 0), 2),
                         "current_value": round(float(p.get("currentValue") or 0), 2),
+                        "last_activity_ts": last_ts.get(cid, 0),
                     })
+                # Tri : activité la plus récente en haut (fallback sur current_value pour les marchés sans activité)
+                markets.sort(key=lambda m: (m["last_activity_ts"], m["current_value"]), reverse=True)
             else:
-                err = f"API {r.status_code}"
+                err = f"API {r_pos.status_code}"
     except Exception as e:
         logger.warning(f"discover_trader_markets failed: {e}")
         err = str(e)
