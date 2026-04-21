@@ -15,16 +15,22 @@ MIN_SIGNAL_SIZE = 0.5
 
 @dataclass
 class TradeSignal:
-    """A trade detected from a followed master trader."""
+    """A trade detected from a followed master trader.
+
+    For SELL signals, `sell_ratio` indicates what fraction of the master's
+    position was sold (0.0-1.0). Followers should apply the same ratio to
+    their own position size.
+    """
     master_wallet: str
     market_id: str
     token_id: str
     outcome: str
     side: str  # "BUY" or "SELL"
-    size: float  # shares
+    size: float  # shares (delta for partial, total for full close)
     price: float
     master_pnl_pct: float = 0.0
     market_question: str = ""
+    sell_ratio: float = 1.0  # 0.0-1.0, only meaningful for SELL signals
 
 
 @dataclass
@@ -264,10 +270,20 @@ class MultiMasterMonitor:
                 old_pos = known[token_id]
                 size_decrease = old_pos.size - pos.size
                 if size_decrease >= MIN_SIGNAL_SIZE:
+                    # BUG FIX #2: Skip if market is resolved (= REDEEM, not SELL)
+                    if getattr(pos, "redeemable", False):
+                        logger.info(
+                            f"[{wallet[:10]}...] Position decrease on {token_id[:12]}... "
+                            f"but market RESOLVED — skip SELL signal (REDEEM expected)"
+                        )
+                        continue
+                    # BUG FIX #1: compute sell ratio so followers sell SAME % of
+                    # their own position (not blindly the master's USDC delta).
+                    sell_ratio = size_decrease / old_pos.size if old_pos.size > 0 else 1.0
                     logger.info(
                         f"[{wallet[:10]}...] Position decrease detected: "
-                        f"{old_pos.size:.2f} → {pos.size:.2f} (-{size_decrease:.2f}) "
-                        f"on {token_id[:12]}..."
+                        f"{old_pos.size:.2f} → {pos.size:.2f} (-{size_decrease:.2f}, "
+                        f"{sell_ratio*100:.0f}%) on {token_id[:12]}..."
                     )
                     signal = TradeSignal(
                         master_wallet=wallet,
@@ -279,12 +295,20 @@ class MultiMasterMonitor:
                         price=pos.current_price,
                         master_pnl_pct=pos.pnl_pct,
                         market_question=pos.title,
+                        sell_ratio=sell_ratio,
                     )
                     await self._emit_signal(signal)
 
         # Closed positions only → SELL signal (token fully exits)
         for token_id, pos in known.items():
             if token_id not in current_map:
+                # BUG FIX #2: Skip if market is resolved (REDEEM, not SELL)
+                if getattr(pos, "redeemable", False):
+                    logger.info(
+                        f"[{wallet[:10]}...] Position {token_id[:12]}... disappeared "
+                        f"but market RESOLVED — skip SELL signal (REDEEM expected)"
+                    )
+                    continue
                 signal = TradeSignal(
                     master_wallet=wallet,
                     market_id=pos.market_id,
@@ -295,6 +319,7 @@ class MultiMasterMonitor:
                     price=pos.current_price,
                     master_pnl_pct=pos.pnl_pct,
                     market_question=pos.title,
+                    sell_ratio=1.0,  # full close
                 )
                 await self._emit_signal(signal)
 

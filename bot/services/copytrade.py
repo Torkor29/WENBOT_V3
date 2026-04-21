@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
@@ -396,21 +397,57 @@ class CopyTradeEngine:
                     except Exception as e:
                         logger.warning("Trader tracker check error (continuing): %s", e)
 
-                try:
-                    gross_amount = calculate_trade_size(
-                        user_settings,
-                        master_amount_usdc=signal.size * signal.price,
-                        master_portfolio_usdc=master_portfolio_usdc,
-                        current_balance_usdc=balance,
+                # ══════════════════════════════════════════════
+                # SIZING: différent pour BUY vs SELL
+                # ══════════════════════════════════════════════
+                if signal.side.upper() == "SELL":
+                    # BUG FIX #1: Pour un SELL, on vend la même PROPORTION de NOTRE
+                    # position que le master vend de la sienne (sell_ratio).
+                    # On cherche combien de shares on a sur ce token_id depuis notre
+                    # historique de trades (BUY - SELL précédents).
+                    from sqlalchemy import select as _sel2, func as _func2
+                    from bot.models.trade import Trade as _Trade2
+                    shares_held = await session.scalar(
+                        _sel2(_func2.coalesce(_func2.sum(
+                            case((_Trade2.side == TradeSide.BUY, _Trade2.shares),
+                                 else_=-_Trade2.shares)
+                        ), 0.0)).where(
+                            _Trade2.user_id == user.id,
+                            _Trade2.token_id == signal.token_id,
+                            _Trade2.status == TradeStatus.FILLED,
+                        )
+                    ) or 0.0
+                    shares_held = float(shares_held)
+                    if shares_held <= 0:
+                        logger.info(
+                            f"[{tg_id}] ℹ SELL signal but no position held on "
+                            f"{signal.token_id[:12]}... — skip"
+                        )
+                        return
+                    sell_ratio = max(0.0, min(1.0, float(getattr(signal, "sell_ratio", 1.0) or 1.0)))
+                    shares_to_sell = shares_held * sell_ratio
+                    gross_amount = shares_to_sell * signal.price
+                    logger.info(
+                        f"[{tg_id}] 💰 SELL sizing: {shares_held:.2f} sh held × "
+                        f"{sell_ratio*100:.0f}% = {shares_to_sell:.2f} sh @ "
+                        f"{signal.price:.4f} = {gross_amount:.2f} USDC"
                     )
-                except SizingError as e:
-                    logger.warning(f"[{tg_id}] ❌ Sizing error: {e}")
-                    await self._notify_error(user, signal, f"Erreur de sizing : {e}")
-                    return
+                else:
+                    try:
+                        gross_amount = calculate_trade_size(
+                            user_settings,
+                            master_amount_usdc=signal.size * signal.price,
+                            master_portfolio_usdc=master_portfolio_usdc,
+                            current_balance_usdc=balance,
+                        )
+                    except SizingError as e:
+                        logger.warning(f"[{tg_id}] ❌ Sizing error: {e}")
+                        await self._notify_error(user, signal, f"Erreur de sizing : {e}")
+                        return
 
-                # Apply hot streak boost
-                if hot_boost > 1.0:
-                    gross_amount *= hot_boost
+                    # Apply hot streak boost (BUY only)
+                    if hot_boost > 1.0:
+                        gross_amount *= hot_boost
 
                 logger.info(f"[{tg_id}] 💰 Sized at {gross_amount:.2f} USDC (boost {hot_boost:.2f}x)")
 
@@ -542,6 +579,35 @@ class CopyTradeEngine:
                         # Credit paper balance on sell (proceeds = shares × price)
                         proceeds = fee_result.net_amount  # net after fee
                         user.paper_balance += proceeds
+                        # BUG FIX #3: compute realized PnL for SELL (paper)
+                        try:
+                            from sqlalchemy import select as _sel3, func as _func3
+                            from bot.models.trade import Trade as _Trade3
+                            avg_entry = await session.scalar(
+                                _sel3(
+                                    _func3.coalesce(
+                                        _func3.sum(_Trade3.gross_amount_usdc) / _func3.nullif(_func3.sum(_Trade3.shares), 0),
+                                        0.0,
+                                    )
+                                ).where(
+                                    _Trade3.user_id == user.id,
+                                    _Trade3.token_id == signal.token_id,
+                                    _Trade3.side == TradeSide.BUY,
+                                    _Trade3.status == TradeStatus.FILLED,
+                                )
+                            )
+                            avg_entry = float(avg_entry or 0)
+                            if avg_entry > 0 and trade.shares:
+                                realized = (signal.price - avg_entry) * float(trade.shares)
+                                trade.settlement_pnl = round(realized, 2)
+                                trade.is_settled = True  # SELL = position clôturée pour ce delta
+                                logger.info(
+                                    f"[{tg_id}] 💵 Realized PnL: ({signal.price:.4f} - "
+                                    f"{avg_entry:.4f}) × {trade.shares:.2f} = "
+                                    f"{realized:+.2f} USDC"
+                                )
+                        except Exception as _e:
+                            logger.warning(f"[{tg_id}] Realized PnL calc failed: {_e}")
                 else:
                     try:
                         order_result = await polymarket_client.place_market_order(
@@ -555,6 +621,36 @@ class CopyTradeEngine:
                             trade.shares = order_result.filled_size
                             trade.status = TradeStatus.FILLED
                             trade.tx_hash = order_result.order_id
+                            # BUG FIX #3: compute realized PnL for LIVE SELL
+                            if signal.side == "SELL":
+                                try:
+                                    from sqlalchemy import select as _sel4, func as _func4
+                                    from bot.models.trade import Trade as _Trade4
+                                    avg_entry = await session.scalar(
+                                        _sel4(
+                                            _func4.coalesce(
+                                                _func4.sum(_Trade4.gross_amount_usdc) / _func4.nullif(_func4.sum(_Trade4.shares), 0),
+                                                0.0,
+                                            )
+                                        ).where(
+                                            _Trade4.user_id == user.id,
+                                            _Trade4.token_id == signal.token_id,
+                                            _Trade4.side == TradeSide.BUY,
+                                            _Trade4.status == TradeStatus.FILLED,
+                                        )
+                                    )
+                                    avg_entry = float(avg_entry or 0)
+                                    if avg_entry > 0 and trade.shares:
+                                        realized = (signal.price - avg_entry) * float(trade.shares)
+                                        trade.settlement_pnl = round(realized, 2)
+                                        trade.is_settled = True
+                                        logger.info(
+                                            f"[{tg_id}] 💵 LIVE realized PnL: "
+                                            f"({signal.price:.4f} - {avg_entry:.4f}) × "
+                                            f"{trade.shares:.2f} = {realized:+.2f} USDC"
+                                        )
+                                except Exception as _e:
+                                    logger.warning(f"[{tg_id}] Realized PnL calc failed: {_e}")
                         else:
                             trade.status = TradeStatus.FAILED
                             trade.error_message = order_result.error
