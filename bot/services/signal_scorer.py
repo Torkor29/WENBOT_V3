@@ -132,10 +132,11 @@ class SignalScorer:
                 **details.get(k, {}),
             }
 
+        signal_hash = SignalScore.make_hash(
+            signal.master_wallet, signal.market_id, signal.token_id, signal.side
+        )
         score = SignalScore(
-            signal_hash=SignalScore.make_hash(
-                signal.master_wallet, signal.market_id, signal.token_id, signal.side
-            ),
+            signal_hash=signal_hash,
             master_wallet=signal.master_wallet,
             market_id=signal.market_id,
             token_id=signal.token_id,
@@ -146,13 +147,23 @@ class SignalScorer:
             created_at=utcnow(),
         )
 
+        # Pre-check: same signal hash already stored → skip insert to avoid
+        # IntegrityError on re-detection of the same master position (the
+        # monitor re-detects unchanged positions on every poll).
         try:
+            from sqlalchemy import select as _sel
             async with async_session() as session:
-                session.add(score)
-                await session.commit()
-                await session.refresh(score)
+                existing = await session.scalar(
+                    _sel(SignalScore.id).where(SignalScore.signal_hash == signal_hash).limit(1)
+                )
+                if existing:
+                    logger.debug("Signal hash %s already scored — skip insert", signal_hash[:12])
+                else:
+                    session.add(score)
+                    await session.commit()
+                    await session.refresh(score)
         except Exception as e:
-            logger.warning("Failed to persist signal score: %s", e)
+            logger.debug("Signal score persist skipped (%s): %s", type(e).__name__, e)
 
         logger.info(
             "Signal scored: %.0f/100 %s %s on %s",
@@ -379,14 +390,16 @@ class SignalScorer:
             count = 0
             wallet_states = getattr(self._monitor, "_wallet_states", {})
 
-            for wallet, positions in wallet_states.items():
+            for wallet, state in wallet_states.items():
                 if wallet == signal.master_wallet:
                     continue
-                for pos in (positions or []):
-                    token = pos.get("asset", {}).get("id", "") or pos.get("token_id", "")
-                    if token == signal.token_id:
-                        count += 1
-                        break
+                # state is a WalletState dataclass with .positions dict {token_id: Position}
+                positions = getattr(state, "positions", {}) if state else {}
+                if not positions:
+                    continue
+                # Fast lookup by token_id (positions is a dict)
+                if signal.token_id in positions:
+                    count += 1
 
             if count >= 3:
                 score = 100.0
