@@ -1410,8 +1410,20 @@ route(/^more\/settings$/, async () => {
       ${hint ? `<div class="input-hint">${hint}</div>` : ""}
     </div>`;
 
+  // Hint helper: "Recommandé X · Si Y → Z"
+  const hint = (recommended, strategyTips) => {
+    let h = `<b>✅ Recommandé : ${recommended}</b>`;
+    if (strategyTips) h += `<br>${strategyTips}`;
+    return h;
+  };
+
   render(`
     <div class="page-title">Réglages</div>
+
+    <div class="alert info" style="margin-bottom:14px">
+      <h4>💡 Astuce</h4>
+      <p>Chaque paramètre a une <b>valeur recommandée</b> indiquée. Si vous débutez, gardez les défauts et utilisez un des <b>3 profils rapides</b> Smart Analysis (Prudent / Équilibré / Agressif) pour tout régler en 1 clic.</p>
+    </div>
 
     <div class="card">
       <div class="card-title">🔌 Mode de trading</div>
@@ -1421,75 +1433,98 @@ route(/^more\/settings$/, async () => {
         : `<div class="alert warning" style="margin-bottom:10px"><h4>💵 Mode LIVE actif</h4><p>Les trades sont <b>réels</b> sur Polygon. Chaque copie utilise votre USDC on-chain.</p></div>
            <button class="btn btn-secondary" onclick="window._toggleMode(true)">📝 Repasser en mode Paper</button>`}
       <div style="height:10px"></div>
-      ${tgl("is_paused", "Mettre le copy trading en pause", "Stoppe temporairement la copie de nouveaux signaux. Les positions ouvertes restent gérées.", s.is_paused)}
+      ${tgl("is_paused", "Mettre le copy trading en pause", "Stoppe temporairement la copie. Les positions ouvertes restent gérées (SL/TP actifs).", s.is_paused)}
     </div>
 
     <div class="card">
       <div class="card-title">💰 Capital & taille des trades</div>
-      ${num("allocated_capital", "Capital alloué (USDC)", s.allocated_capital, 10, 10, 100000, "Capital total dédié au copy trading. Sert de base pour les modes %, Kelly")}
-      ${sel("sizing_mode", "Comment calculer la taille de chaque trade", s.sizing_mode || "fixed",
-        [{value:"fixed", label:"🟰 Fixe — toujours le même montant USDC"},
-         {value:"percent", label:"% — pourcentage du capital alloué"},
+      ${num("allocated_capital", "Capital alloué (USDC)", s.allocated_capital, 10, 10, 100000,
+        hint("10% de votre capital total", "Mettez ici juste la somme que vous acceptez de perdre en totalité, pas tout votre USDC."))}
+      ${sel("sizing_mode", "Mode de sizing", s.sizing_mode || "fixed",
+        [{value:"fixed", label:"🟰 Fixe — toujours le même montant"},
+         {value:"percent", label:"% — % du capital alloué"},
          {value:"proportional", label:"📏 Proportionnel — copie la proportion du master"},
-         {value:"kelly", label:"🧠 Kelly — formule statistique (avancé)"}],
-        "Détermine combien d'USDC engager à chaque trade copié")}
-      ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000, "Utilisé si mode FIXÉ. Ex: 10 = chaque trade fait 10 USDC")}
-      ${num("percent_per_trade", "% du capital par trade", s.percent_per_trade, 0.5, 0.1, 100, "Utilisé si mode % du capital. Ex: 5 = engage 5% du capital alloué à chaque trade")}
-      ${num("multiplier", "Multiplicateur global", s.multiplier, 0.1, 0.1, 10, "Multiplie le résultat final. 0.5 = moitié, 2 = double. Utile pour ajuster sans changer le mode")}
-      ${num("min_trade_usdc", "Montant minimum (USDC)", s.min_trade_usdc, 0.5, 0, 1000, "Plancher : si la taille calculée est inférieure, le trade est skippé")}
-      ${num("max_trade_usdc", "Montant maximum (USDC)", s.max_trade_usdc, 0.5, 0, 10000, "Plafond : la taille calculée est cappée à cette valeur")}
-      ${num("daily_limit_usdc", "Limite quotidienne (USDC)", s.daily_limit_usdc, 1, 0, 100000, "Total max dépensé par jour, toutes copies confondues. Reset minuit UTC")}
+         {value:"kelly", label:"🧠 Kelly — formule mathématique (avancé)"}],
+        hint("Fixe pour débuter", "Fixe = prévisible. Proportionnel = on mime vraiment le master mais tailles variables. Kelly = rareté mathématique."))}
+      ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000,
+        hint("5-10 USDC pour débuter", "Débutant → 2-5. Confiant → 10-50. Chaque trade fera ce montant précis."))}
+      ${num("percent_per_trade", "% du capital par trade", s.percent_per_trade, 0.5, 0.1, 100,
+        hint("2-5%", "Augmentez si peu de traders suivis (concentré). Diminuez si beaucoup (risque dispersé)."))}
+      ${num("multiplier", "Multiplicateur global", s.multiplier, 0.1, 0.1, 10,
+        hint("1.0 (neutre)", "0.5 = trades 2× plus petits. 2.0 = 2× plus gros. Pour ajuster vite sans changer le mode."))}
+      ${num("min_trade_usdc", "Montant minimum (USDC)", s.min_trade_usdc, 0.5, 0, 1000,
+        hint("1 USDC", "Plus haut → skip les micro-trades. Polymarket a un min technique de 1 USDC par ordre."))}
+      ${num("max_trade_usdc", "Montant maximum (USDC)", s.max_trade_usdc, 0.5, 0, 10000,
+        hint("10% de votre capital", "Plus bas → protection contre les gros trades du master. Plus haut → moins de limitation."))}
+      ${num("daily_limit_usdc", "Limite quotidienne (USDC)", s.daily_limit_usdc, 1, 0, 100000,
+        hint("20-30% de votre capital", "Protège des journées perdantes en série. Reset minuit UTC."))}
     </div>
 
     <div class="card">
       <div class="card-title">🧠 Smart Analysis V3</div>
       ${tgl("signal_scoring_enabled", "Scoring 0-100 activé", "Évalue chaque signal sur 6 critères (spread, liquidité, conviction, forme du trader, timing, consensus)", s.signal_scoring_enabled)}
-      ${num("min_signal_score", "Score minimum (0-100)", s.min_signal_score, 5, 0, 100, "Seuls les signaux avec score ≥ ce seuil sont copiés. 40 = équilibré, 65+ = strict")}
-      ${tgl("smart_filter_enabled", "Smart filter avancé", "Active les filtres par-type-de-marché (winrate trader sur cette catégorie, etc.)", s.smart_filter_enabled)}
-      ${tgl("skip_coin_flip", "Ignorer les 50/50", "Skip les marchés où le prix est très proche de 0.50 (pas de conviction)", s.skip_coin_flip)}
-      ${num("min_conviction_pct", "Conviction minimum (%)", s.min_conviction_pct, 0.5, 0, 100, "Taille du trade master / portfolio master. Ex: 2 = le master doit miser ≥ 2% de son portfolio")}
-      ${num("max_price_drift_pct", "Drift prix max (%)", s.max_price_drift_pct, 0.5, 0, 50, "Si le prix actuel a bougé de plus de X% par rapport au prix d'exécution du master, skip")}
-      ${num("min_trader_winrate_for_type", "Win rate min trader / type (%)", s.min_trader_winrate_for_type, 5, 0, 100, "Le master doit avoir ce WR min sur le TYPE du marché (ex: 55% sur Sport)")}
-      ${num("min_trader_trades_for_type", "Min trades trader / type", s.min_trader_trades_for_type, 1, 1, 1000, "Min de trades du master sur ce type pour considérer la stat fiable")}
+      ${num("min_signal_score", "Score minimum (0-100)", s.min_signal_score, 5, 0, 100,
+        hint("40 (équilibré)", "20 = agressif (copie presque tout). 40 = équilibré. 65+ = strict (rate-ratio élevé, mais meilleures trades)."))}
+      ${tgl("smart_filter_enabled", "Smart filter avancé", "Filtres par-type-de-marché (winrate trader sur Crypto, Sport, etc.)", s.smart_filter_enabled)}
+      ${tgl("skip_coin_flip", "Ignorer les 50/50", "Skip si le prix est entre 0.45 et 0.55 (pas de conviction claire)", s.skip_coin_flip)}
+      ${num("min_conviction_pct", "Conviction minimum (%)", s.min_conviction_pct, 0.5, 0, 100,
+        hint("2%", "Exige que le master mise ≥ X% de SON portfolio. 1 = permissif, 5+ = n'accepte que ses gros bets."))}
+      ${num("max_price_drift_pct", "Drift prix max (%)", s.max_price_drift_pct, 0.5, 0, 50,
+        hint("5%", "Baissez à 2-3% pour éviter d'acheter trop cher si le master a déjà été suivi par la foule. Au-delà = skip."))}
+      ${num("min_trader_winrate_for_type", "Win rate min trader / type (%)", s.min_trader_winrate_for_type, 5, 0, 100,
+        hint("55%", "Exige que le master ait > X% WR sur ce TYPE de marché. 50 = permissif, 65+ = trader expert."))}
+      ${num("min_trader_trades_for_type", "Min trades trader / type", s.min_trader_trades_for_type, 1, 1, 1000,
+        hint("10", "Minimum d'historique pour qu'une stat WR soit fiable. Augmentez si vous voulez des traders prouvés (30+)."))}
       <div class="section-title" style="margin-top:16px"><h2>Profils rapides</h2></div>
-      <div class="small" style="margin-bottom:8px">Applique un preset des poids et seuils en 1 clic</div>
+      <div class="small" style="margin-bottom:8px">En 1 clic, applique un preset cohérent de poids + seuils</div>
       <div class="btn-row cols-3">
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('prudent')">🛡 Prudent</button>
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('balanced')">⚖️ Équilibré</button>
         <button class="btn btn-secondary btn-sm" onclick="window._applyProfile('aggressive')">⚡ Agressif</button>
       </div>
+      <div class="small" style="margin-top:8px"><b>Prudent</b> : score min 65, tous critères ON, skip coin-flip. <b>Équilibré</b> : score min 40, tous ON, recommandé. <b>Agressif</b> : score min 20, désactive spread+timing, mise sur conviction+forme trader.</div>
     </div>
 
     <div class="card">
       <div class="card-title">🛡 Stop Loss & Take Profit</div>
-      ${tgl("stop_loss_enabled", "Stop Loss", "Vend automatiquement si le prix chute du % défini", s.stop_loss_enabled)}
-      ${num("stop_loss_pct", "Seuil Stop Loss (%)", s.stop_loss_pct, 1, 1, 100, "Ex: 20 = vente si prix d'entrée -20%")}
-      ${tgl("take_profit_enabled", "Take Profit", "Vend automatiquement si le prix grimpe du % défini", s.take_profit_enabled)}
-      ${num("take_profit_pct", "Seuil Take Profit (%)", s.take_profit_pct, 1, 1, 500, "Ex: 50 = vente si prix d'entrée +50%")}
-      ${tgl("trailing_stop_enabled", "Trailing Stop", "Stop qui SUIT le prix vers le haut. Verrouille les gains progressivement.", s.trailing_stop_enabled)}
-      ${num("trailing_stop_pct", "Marge trailing (%)", s.trailing_stop_pct, 1, 1, 100, "Ex: 10 = vente si prix retombe de -10% par rapport au plus haut atteint")}
+      ${tgl("stop_loss_enabled", "Stop Loss activé", "ESSENTIEL pour éviter de perdre gros sur un trade qui tourne mal", s.stop_loss_enabled)}
+      ${num("stop_loss_pct", "Seuil Stop Loss (%)", s.stop_loss_pct, 1, 1, 100,
+        hint("20%", "Prudent → 10-15%. Moyen → 20%. Laisse-lui du temps → 30-40%. Descend trop bas = sortie trop facile."))}
+      ${tgl("take_profit_enabled", "Take Profit activé", "Verrouille les gains automatiquement. Désactivé par défaut car le trailing est souvent meilleur.", s.take_profit_enabled)}
+      ${num("take_profit_pct", "Seuil Take Profit (%)", s.take_profit_pct, 1, 1, 500,
+        hint("50%", "Court terme → 30%. Moyen → 50%. Laisse courir → 100%+. Trop bas = vend avant le sommet."))}
+      ${tgl("trailing_stop_enabled", "Trailing Stop", "MEILLEUR QUE TP FIXE : SL qui suit le prix vers le haut, verrouille progressivement les gains", s.trailing_stop_enabled)}
+      ${num("trailing_stop_pct", "Marge trailing (%)", s.trailing_stop_pct, 1, 1, 100,
+        hint("10%", "Serré (5%) = sortie rapide au 1er retracement. Lâche (15-20%) = laisse respirer. Volatile → augmentez."))}
     </div>
 
     <div class="card">
       <div class="card-title">⏱ Sorties avancées</div>
-      ${tgl("time_exit_enabled", "Sortie temporelle", "Ferme automatiquement la position après X heures, peu importe le prix", s.time_exit_enabled)}
-      ${num("time_exit_hours", "Durée max (heures)", s.time_exit_hours, 1, 1, 720, "Ex: 24 = ferme toute position ouverte depuis ≥ 24h")}
-      ${tgl("scale_out_enabled", "Scale out (TP partiel)", "À l'atteinte du TP : vend X% au lieu de 100%, garde le reste avec SL=entrée", s.scale_out_enabled)}
-      ${num("scale_out_pct", "% à vendre au TP1", s.scale_out_pct, 5, 5, 95, "Ex: 50 = encaisse la moitié au TP, laisse courir l'autre moitié sans risque")}
+      ${tgl("time_exit_enabled", "Sortie temporelle", "Ferme la position après X heures, peu importe le prix. Utile si vous pariez sur des événements rapides.", s.time_exit_enabled)}
+      ${num("time_exit_hours", "Durée max (heures)", s.time_exit_hours, 1, 1, 720,
+        hint("24h (1 jour)", "Court terme → 6-12h. Moyen → 24-72h. Long terme (élections, saisons) → 168h+. 720h max (30j)."))}
+      ${tgl("scale_out_enabled", "Scale out (TP partiel)", "Au TP : vend X% au lieu de 100% et sécurise le reste (SL=entrée). Maximise le potentiel.", s.scale_out_enabled)}
+      ${num("scale_out_pct", "% à vendre au TP1", s.scale_out_pct, 5, 5, 95,
+        hint("50%", "Plus prudent → 70% (sécurise plus). Plus ambitieux → 30% (laisse courir plus). 50% = équilibre."))}
     </div>
 
     <div class="card">
       <div class="card-title">📊 Risque portefeuille</div>
-      ${num("max_positions", "Max positions ouvertes", s.max_positions, 1, 1, 100, "Au-delà, le bot refuse de prendre une nouvelle position")}
-      ${num("max_category_exposure_pct", "Max exposition / catégorie (%)", s.max_category_exposure_pct, 5, 5, 100, "Ex: 30 = max 30% du capital en Crypto, max 30% en Politics, etc.")}
-      ${num("max_direction_bias_pct", "Max biais directionnel (%)", s.max_direction_bias_pct, 5, 50, 100, "Ex: 70 = bloque si plus de 70% des positions sont du même côté (YES vs NO)")}
+      ${num("max_positions", "Max positions ouvertes", s.max_positions, 1, 1, 100,
+        hint("10-15", "Débutant → 5-10 (simple à suivre). Expérimenté → 15-30. Au-delà c'est ingérable."))}
+      ${num("max_category_exposure_pct", "Max exposition / catégorie (%)", s.max_category_exposure_pct, 5, 5, 100,
+        hint("30%", "Diversification : max 30% du capital en Crypto, max 30% en Politics, etc. Diminuez pour encore plus diversifié."))}
+      ${num("max_direction_bias_pct", "Max biais directionnel (%)", s.max_direction_bias_pct, 5, 50, 100,
+        hint("70%", "Évite d'être trop YES-biaisé ou NO-biaisé. 70% = max 70% des positions du même côté."))}
     </div>
 
     <div class="card">
       <div class="card-title">🔥 Suivi performance traders</div>
-      ${tgl("auto_pause_cold_traders", "Pause auto traders 'cold'", "Skip les copies si le trader a un win rate sous le seuil sur 7 derniers jours (sécurité)", s.auto_pause_cold_traders)}
-      ${num("cold_trader_threshold", "Seuil 'cold' win rate (%)", s.cold_trader_threshold, 1, 0, 100, "Ex: 40 = un trader avec WR < 40% est considéré cold")}
-      ${num("hot_streak_boost", "Multiplicateur hot streak", s.hot_streak_boost, 0.1, 1, 5, "Ex: 1.5 = booste le sizing de +50% si le trader est en série de wins (≥65% WR récent)")}
+      ${tgl("auto_pause_cold_traders", "Pause auto traders 'cold'", "Skip si le trader a un win rate sous le seuil sur 7j. Sécurité.", s.auto_pause_cold_traders)}
+      ${num("cold_trader_threshold", "Seuil 'cold' win rate (%)", s.cold_trader_threshold, 1, 0, 100,
+        hint("40%", "Plus haut (45-50%) = plus sélectif, pause les traders qui décrochent vite. Plus bas (30%) = tolérant."))}
+      ${num("hot_streak_boost", "Multiplicateur hot streak", s.hot_streak_boost, 0.1, 1, 5,
+        hint("1.5× (+50%)", "1.0 = pas de boost. 1.5 = +50% si trader chaud. 2.0 = 2× sur les hot streaks (plus agressif)."))}
     </div>
 
     <div class="card">
@@ -1499,17 +1534,19 @@ route(/^more\/settings$/, async () => {
          {value:"fast", label:"🚀 Fast — 50 gwei (~1.5 sec)"},
          {value:"ultra", label:"⚡ Ultra — 100 gwei (<1 sec)"},
          {value:"instant", label:"💎 Instant — 200 gwei (max speed)"}],
-        "Plus la vitesse est élevée, plus vous payez de MATIC en gas. Affecte les transferts de fees et les prochaines transactions.")}
-      ${num("copy_delay_seconds", "Délai avant copie (secondes)", s.copy_delay_seconds, 1, 0, 600, "Attendre N secondes avant d'exécuter le trade après détection du master. 0 = immédiat. Utile pour éviter le front-running.")}
-      ${tgl("manual_confirmation", "Demander confirmation manuelle", "Pour les gros trades, vous recevez une notif et devez approuver avant exécution", s.manual_confirmation)}
-      ${num("confirmation_threshold_usdc", "Seuil pour confirmation (USDC)", s.confirmation_threshold_usdc, 1, 0, 10000, "Si le trade dépasse ce montant, demande confirmation. 0 = jamais demander, 50 = demander dès 50 USDC")}
+        hint("Fast", "Normal = économique. Fast = meilleur rapport vitesse/coût. Ultra/Instant = si vous êtes en compétition sur des signaux précieux."))}
+      ${num("copy_delay_seconds", "Délai avant copie (secondes)", s.copy_delay_seconds, 1, 0, 600,
+        hint("0 (immédiat)", "0 = max speed. 2-5s = évite le front-running sur des gros traders. 10+ = vous perdez de la vitesse."))}
+      ${tgl("manual_confirmation", "Demander confirmation manuelle", "Pour les gros trades, notif + approbation requise avant exécution", s.manual_confirmation)}
+      ${num("confirmation_threshold_usdc", "Seuil pour confirmation (USDC)", s.confirmation_threshold_usdc, 1, 0, 10000,
+        hint("50 USDC", "0 = jamais demander. 50 = demander dès 50 USDC. Mettez = votre max_trade_usdc pour confirmer chaque trade."))}
     </div>
 
     <div class="card">
       <div class="card-title">🔔 Notifications</div>
       ${sel("notification_mode", "Où recevoir les alertes", s.notification_mode || "dm",
         [{value:"dm", label:"📱 Direct message"},{value:"group", label:"👥 Groupe (topic)"},{value:"both", label:"📨 Les deux"}],
-        "Destination des notifications (trades, SL/TP, erreurs)")}
+        hint("DM (direct message)", "DM = privé, pratique. Groupe = si vous voulez partager avec une équipe. Both = les deux."))}
       ${tgl("notify_on_buy", "Notifier sur achats", "Recevoir une notif à chaque trade BUY copié", s.notify_on_buy)}
       ${tgl("notify_on_sell", "Notifier sur ventes", "Recevoir une notif à chaque trade SELL copié", s.notify_on_sell)}
       ${tgl("notify_on_sl_tp", "Notifier SL/TP/Sortie", "Recevoir une notif quand un Stop Loss, Take Profit, trailing ou time exit se déclenche", s.notify_on_sl_tp)}
@@ -1517,9 +1554,17 @@ route(/^more\/settings$/, async () => {
 
     <div class="card">
       <div class="card-title">🎯 Stratégies automatisées</div>
-      ${num("strategy_trade_fee_rate", "Frais par trade (taux 0.01-0.20)", s.strategy_trade_fee_rate, 0.01, 0.01, 0.20, "0.01 = 1%, 0.05 = 5%, 0.20 = 20%. Plus c'est élevé, plus tu es prioritaire dans la file d'exécution.")}
-      ${num("strategy_max_trades_per_day", "Max trades par jour", s.strategy_max_trades_per_day, 1, 1, 200, "Nombre max de signaux exécutés par jour, toutes stratégies confondues. Reset minuit UTC.")}
-      ${tgl("strategy_is_paused", "Mettre les stratégies en pause", "Stoppe l'exécution des signaux des stratégies. Les abonnements restent actifs.", s.strategy_is_paused)}
+      ${num("strategy_trade_fee_rate", "Frais par trade (taux)", s.strategy_trade_fee_rate, 0.01, 0.01, 0.20,
+        hint("0.01 (1%)", "1% = frais minimum. Plus haut (3-5%) = vous êtes prioritaire dans la file d'exécution des stratégies."))}
+      ${num("strategy_max_trades_per_day", "Max trades par jour", s.strategy_max_trades_per_day, 1, 1, 200,
+        hint("50", "Plus bas = protection si la stratégie fait trop de trades. 200 = pas de limite effective."))}
+      ${tgl("strategy_is_paused", "Mettre les stratégies en pause", "Stoppe l'exécution des signaux de stratégies. Les abonnements restent actifs.", s.strategy_is_paused)}
+    </div>
+
+    <div class="card">
+      <div class="card-title">♻️ Réinitialisation</div>
+      <div class="small" style="margin-bottom:10px">Remet tous les paramètres ci-dessus aux valeurs recommandées par défaut. Ne touche PAS à vos wallets, traders suivis, ni mode Paper/Live.</div>
+      <button class="btn btn-danger" onclick="window._resetSettings()">♻️ Restaurer les valeurs par défaut</button>
     </div>
 
     <div style="height:20px"></div>
@@ -1549,6 +1594,21 @@ window._applyProfile = async function(profile) {
   if (!ok) return;
   try { await api("/settings/scoring-profile", {method:"POST", body:{profile}}); toast("Profil appliqué ✓"); dispatch(); }
   catch (e) { toast(e.message, "error"); }
+};
+
+window._resetSettings = async function() {
+  const ok = await confirmModal(
+    "♻️ Restaurer les valeurs par défaut ?",
+    "Tous les paramètres (sizing, SL/TP, smart analysis, notifs, etc.) seront remis aux valeurs recommandées.\n\nNE TOUCHE PAS à :\n• Votre wallet et clés privées\n• Vos traders suivis\n• Mode Paper/Live\n• Marchés bloqués\n\nConfirmer ?",
+    "Restaurer",
+    "danger"
+  );
+  if (!ok) return;
+  try {
+    const r = await api("/settings/reset-defaults", {method:"POST"});
+    toast(`✓ ${r.reset_count} paramètres réinitialisés`);
+    dispatch();
+  } catch (e) { toast(e.message, "error"); }
 };
 
 /* ═══════════════════════════════════════════════════ RAPPORTS (split: Mes trades / Mes traders) */

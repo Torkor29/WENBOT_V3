@@ -1046,6 +1046,110 @@ async def update_settings(body: SettingsUpdate, user: User = Depends(get_current
     return {"ok": True, "updated": list(updates.keys())}
 
 
+# Default values — keep in sync with bot/models/settings.py defaults
+_SETTINGS_DEFAULTS = {
+    # UserSettings
+    "allocated_capital": 100.0,
+    "sizing_mode": "fixed",
+    "fixed_amount": 10.0,
+    "percent_per_trade": 5.0,
+    "multiplier": 1.0,
+    "min_trade_usdc": 1.0,
+    "max_trade_usdc": 100.0,
+    "stop_loss_enabled": True,
+    "stop_loss_pct": 20.0,
+    "take_profit_enabled": False,
+    "take_profit_pct": 50.0,
+    "trailing_stop_enabled": False,
+    "trailing_stop_pct": 10.0,
+    "time_exit_enabled": False,
+    "time_exit_hours": 24,
+    "scale_out_enabled": False,
+    "scale_out_pct": 50.0,
+    "copy_delay_seconds": 0,
+    "manual_confirmation": False,
+    "confirmation_threshold_usdc": 50.0,
+    "gas_mode": "fast",
+    "max_expiry_days": None,
+    "max_positions": 15,
+    "max_category_exposure_pct": 30.0,
+    "max_direction_bias_pct": 70.0,
+    "auto_pause_cold_traders": True,
+    "cold_trader_threshold": 40.0,
+    "hot_streak_boost": 1.5,
+    "signal_scoring_enabled": True,
+    "min_signal_score": 40.0,
+    "smart_filter_enabled": True,
+    "min_trader_winrate_for_type": 55.0,
+    "min_trader_trades_for_type": 10,
+    "skip_coin_flip": True,
+    "min_conviction_pct": 2.0,
+    "max_price_drift_pct": 5.0,
+    "notification_mode": "dm",
+    "notify_on_buy": True,
+    "notify_on_sell": True,
+    "notify_on_sl_tp": True,
+    # User flags
+    "is_paused": False,
+    "daily_limit_usdc": 1000.0,
+    # Strategy
+    "strategy_trade_fee_rate": 0.01,
+    "strategy_max_trades_per_day": 50,
+    "strategy_is_paused": False,
+}
+
+
+@router.post("/settings/reset-defaults")
+async def reset_settings_defaults(user: User = Depends(get_current_user)):
+    """Réinitialise tous les paramètres aux valeurs par défaut recommandées.
+
+    Ne touche PAS à :
+    - paper_trading / live_mode_confirmed (safety)
+    - wallet_address / private keys
+    - followed_wallets / trader_filters / blacklisted_markets (choix user)
+    - scoring_criteria (utilisez /settings/scoring-profile pour reset)
+    """
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        s = u.settings
+        if not s:
+            raise HTTPException(500, "User settings missing")
+
+        applied = []
+        for key, default_val in _SETTINGS_DEFAULTS.items():
+            # Dispatch per target (User / UserSettings / StrategyUserSettings)
+            if key == "is_paused":
+                u.is_paused = default_val
+                applied.append(key)
+            elif key == "daily_limit_usdc":
+                u.daily_limit_usdc = default_val
+                applied.append(key)
+            elif key.startswith("strategy_"):
+                strat_s = await get_or_create_strategy_settings(session, u)
+                strat_map = {
+                    "strategy_trade_fee_rate": "trade_fee_rate",
+                    "strategy_max_trades_per_day": "max_trades_per_day",
+                    "strategy_is_paused": "is_paused",
+                }
+                attr = strat_map.get(key)
+                if attr and hasattr(strat_s, attr):
+                    setattr(strat_s, attr, default_val)
+                    applied.append(key)
+            elif key in ("sizing_mode", "gas_mode"):
+                enum_cls = _ENUM_FIELDS.get(key)
+                if enum_cls:
+                    try: setattr(s, key, enum_cls(default_val))
+                    except Exception: pass
+                    applied.append(key)
+            elif hasattr(s, key):
+                setattr(s, key, default_val)
+                applied.append(key)
+
+        await session.commit()
+    logger.info(f"User {user.id} reset settings to defaults ({len(applied)} fields)")
+    return {"ok": True, "reset_count": len(applied), "fields": applied}
+
+
 @router.post("/settings/scoring-profile")
 async def apply_scoring_profile(body: ScoringProfileReq, user: User = Depends(get_current_user)):
     profile = body.profile.lower()
