@@ -623,14 +623,40 @@ class PolymarketClient:
         token_id: str,
         side: str,
         amount_usdc: float,
+        shares: Optional[float] = None,
     ) -> OrderResult:
         """Place a market (FOK) order — fill immediately at best price.
+
+        For BUY: `amount_usdc` is the USDC amount to spend.
+        For SELL: `shares` is the number of shares to sell. If `shares`
+        is None, we fall back to `amount_usdc / current_price` (best effort).
 
         C4 FIX: FOK orders are atomic — do NOT retry on order rejection
         (would create duplicate orders). Only retry on network errors
         (timeout, connection error, 5xx).
         """
         import httpx
+
+        side_norm = (side or "").strip().upper()
+
+        # For SELL, the amount field in MarketOrderArgs is in SHARES, not USDC.
+        if side_norm == "SELL":
+            if shares is None or shares <= 0:
+                # Best-effort fallback: convert USDC budget to shares via current price
+                try:
+                    price = await self.get_price(token_id, side="SELL")
+                except Exception:
+                    price = 0.0
+                if price and price > 0:
+                    shares = amount_usdc / price
+                else:
+                    return OrderResult(
+                        success=False,
+                        error="Cannot compute SELL size: no shares provided and no price available",
+                    )
+            order_amount = float(shares)
+        else:
+            order_amount = float(amount_usdc)
 
         last_err: Optional[str] = None
         for attempt in range(MAX_RETRIES + 1):
@@ -641,8 +667,8 @@ class PolymarketClient:
 
                 order_args = MarketOrderArgs(
                     token_id=token_id,
-                    amount=amount_usdc,
-                    side=side,
+                    amount=order_amount,
+                    side=side_norm or side,
                 )
 
                 signed_order = client.create_market_order(order_args)
@@ -810,11 +836,14 @@ class PolymarketClient:
         except Exception:
             pass
 
-        # 2) Try /price endpoint
+        # 2) Try /price endpoint — respect the side (buyers look at ask, sellers at bid)
+        side_param = (side or "BUY").strip().lower()
+        if side_param not in ("buy", "sell"):
+            side_param = "buy"
         try:
             resp = await http.get(
                 f"{CLOB_HOST}/price",
-                params={"token_id": token_id, "side": "buy"},
+                params={"token_id": token_id, "side": side_param},
             )
             resp.raise_for_status()
             price = float(resp.json().get("price", 0))
@@ -823,7 +852,7 @@ class PolymarketClient:
         except Exception:
             pass
 
-        # 3) Try order book — extract best bid
+        # 3) Try order book — extract best bid (SELL) or best ask (BUY)
         try:
             resp = await http.get(
                 f"{CLOB_HOST}/book",
@@ -833,14 +862,24 @@ class PolymarketClient:
             book = resp.json()
             bids = book.get("bids", [])
             asks = book.get("asks", [])
-            if bids:
-                best_bid = float(bids[0].get("price", 0))
-                if best_bid > 0:
-                    return best_bid
-            if asks:
-                best_ask = float(asks[0].get("price", 0))
-                if best_ask > 0:
-                    return best_ask
+            if side_param == "sell":
+                if bids:
+                    best_bid = float(bids[0].get("price", 0))
+                    if best_bid > 0:
+                        return best_bid
+                if asks:
+                    best_ask = float(asks[0].get("price", 0))
+                    if best_ask > 0:
+                        return best_ask
+            else:
+                if asks:
+                    best_ask = float(asks[0].get("price", 0))
+                    if best_ask > 0:
+                        return best_ask
+                if bids:
+                    best_bid = float(bids[0].get("price", 0))
+                    if best_bid > 0:
+                        return best_bid
         except Exception:
             pass
 

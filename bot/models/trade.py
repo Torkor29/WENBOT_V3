@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base, utcnow
 
 
-class TradeStatus(str, enum.Enum):
+class TradeStatus(enum.Enum):
     PENDING = "pending"
     CONFIRMED = "confirmed"        # User confirmed (manual mode)
     FEE_PAID = "fee_paid"          # Platform fee transferred
@@ -23,7 +23,7 @@ class TradeStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class TradeSide(str, enum.Enum):
+class TradeSide(enum.Enum):
     BUY = "buy"
     SELL = "sell"
 

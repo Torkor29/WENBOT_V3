@@ -382,7 +382,8 @@ class CopyTradeEngine:
 
                 # For real trading: balance checks + one-time Polymarket approval
                 if not is_paper:
-                    if gross_amount > onchain_balance + 1e-6:
+                    # USDC balance only matters for BUY trades; SELL produces USDC.
+                    if signal.side == "BUY" and gross_amount > onchain_balance + 1e-6:
                         await self._notify_error(
                             user,
                             signal,
@@ -486,11 +487,19 @@ class CopyTradeEngine:
                         user.paper_balance += proceeds
                 else:
                     try:
+                        # For SELL, the CLOB expects amount in shares, not USDC.
+                        sell_shares = None
+                        if signal.side == "SELL":
+                            if signal.price > 0:
+                                sell_shares = fee_result.net_amount / signal.price
+                            else:
+                                sell_shares = 0.0
                         order_result = await polymarket_client.place_market_order(
                             private_key=pk,
                             token_id=signal.token_id,
                             side=signal.side,
                             amount_usdc=fee_result.net_amount,
+                            shares=sell_shares,
                         )
 
                         if order_result.success:
