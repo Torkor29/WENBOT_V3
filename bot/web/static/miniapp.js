@@ -761,8 +761,15 @@ route(/^copy\/traders$/, async () => {
     <div class="page-title">Copy Trading</div>
     ${copyNav("copy/traders", {traders: traders.count, positions: positions.count})}
     ${traders.count === 0
-      ? emptyState("👥", "Aucun trader suivi", "Trouvez les meilleurs traders via Découvrir ou ajoutez une adresse manuellement.",
-          {label:"🔍 Découvrir les pépites", onclick:"go('copy/discover')"})
+      ? `<div class="empty">
+          <div class="empty-icon">👥</div>
+          <div class="empty-title">Aucun trader suivi</div>
+          <div class="empty-text">Ajoutez un trader par son adresse Polygon, ou parcourez le classement des top traders dans l'onglet Découvrir.</div>
+          <div style="display:grid;gap:10px;max-width:280px;margin:16px auto 0">
+            <button class="btn btn-primary" onclick="go('copy/traders/add')">+ Ajouter par adresse</button>
+            <button class="btn btn-secondary" onclick="go('copy/discover')">🔍 Découvrir les top traders</button>
+          </div>
+        </div>`
       : `<div class="card card-flush"><div class="list">
           ${traders.traders.map(t => `
             <div class="list-item">
@@ -778,7 +785,7 @@ route(/^copy\/traders$/, async () => {
             </div>`).join("")}
         </div></div>
         <div class="btn-row" style="margin-top:12px">
-          <button class="btn btn-primary btn-sm" onclick="go('copy/traders/add')">+ Par adresse</button>
+          <button class="btn btn-primary btn-sm" onclick="go('copy/traders/add')">+ Ajouter par adresse</button>
           <button class="btn btn-secondary btn-sm" onclick="go('copy/discover')">🔍 Découvrir</button>
         </div>`
     }
