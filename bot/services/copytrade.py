@@ -163,12 +163,13 @@ class CopyTradeEngine:
                 from sqlalchemy import select as _sel, func as _func
                 from bot.models.trade import Trade as _Trade
                 _cutoff = _dt.utcnow() - _td(minutes=5)
+                _target_side = TradeSide.BUY if signal.side.upper() == "BUY" else TradeSide.SELL
                 _existing = await session.scalar(
                     _sel(_func.count(_Trade.id)).where(
                         _Trade.user_id == user.id,
                         _Trade.market_id == signal.market_id,
                         _Trade.token_id == signal.token_id,
-                        _Trade.side == TradeSide.BUY if signal.side.upper() == "BUY" else TradeSide.SELL,
+                        _Trade.side == _target_side,
                         _Trade.created_at >= _cutoff,
                     )
                 )
