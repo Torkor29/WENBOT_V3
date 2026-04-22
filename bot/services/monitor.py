@@ -230,7 +230,16 @@ class MultiMasterMonitor:
             if token_id not in known:
                 # Brand new position
                 if pos.size < MIN_SIGNAL_SIZE:
+                    logger.info(
+                        f"[{wallet[:10]}...] ⏭️ NEW position skipped (size {pos.size:.4f} "
+                        f"< MIN_SIGNAL_SIZE {MIN_SIGNAL_SIZE}) on {token_id[:12]}... "
+                        f"({pos.title[:40]})"
+                    )
                     continue
+                logger.info(
+                    f"[{wallet[:10]}...] 🆕 NEW position detected: {pos.size:.2f} sh "
+                    f"@ {pos.current_price:.4f} on {token_id[:12]}... ({pos.title[:40]})"
+                )
                 signal = TradeSignal(
                     master_wallet=wallet,
                     market_id=pos.market_id,

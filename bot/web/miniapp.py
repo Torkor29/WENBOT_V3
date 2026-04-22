@@ -714,9 +714,126 @@ async def traders_add(body: TraderAddReq, user: User = Depends(get_current_user)
     return {
         "ok": True,
         "count": len(wallets),
-        "message": "Trader ajouté. Le bot commencera à copier ses PROCHAINS trades.",
-        "note": "Les trades que ce trader a déjà ouverts ne sont pas rétro-copiés (seules les nouvelles positions déclenchent une copie).",
+        "message": "✅ Trader ajouté. Le bot va surveiller ses prochains trades.",
+        "note": (
+            "⚠ IMPORTANT : le bot a snapshoté ses positions actuelles → ELLES NE SERONT PAS COPIÉES. "
+            "Seuls les NOUVEAUX trades qu'il fera à partir de maintenant déclencheront une copie. "
+            "Si tu veux copier ses positions actuelles immédiatement, va dans la fiche du trader "
+            "et clique sur '🔄 Forcer re-détection'."
+        ),
     }
+
+
+@router.get("/copy/traders/{wallet}/monitor-state")
+async def trader_monitor_state(wallet: str, user: User = Depends(get_current_user)):
+    """Diagnostic crucial : que sait le monitor sur ce wallet ?
+
+    Retourne :
+    - watched: True/False (le wallet est-il dans `_wallet_states` ?)
+    - initialized: snapshot pris ou pas
+    - known_positions: nb positions DÉJÀ vues au snapshot (= ne déclencheront PAS de signal)
+    - signals_emitted_since_add: combien de NOUVEAUX trades on a détectés depuis l'ajout
+    - hint_message: message UX clair pour l'user
+    """
+    w_lower = wallet.strip().lower()
+    out: dict[str, Any] = {
+        "wallet": w_lower,
+        "watched": False,
+        "initialized": False,
+        "known_positions": 0,
+        "signals_emitted_since_add": 0,
+        "hint_message": None,
+    }
+    try:
+        from bot.services import _registry as _svc_reg
+        if _svc_reg.monitor is None:
+            out["hint_message"] = "⚠ Le monitor n'est pas démarré. Redémarre le bot."
+            return out
+        states = getattr(_svc_reg.monitor, "_wallet_states", {}) or {}
+        st = states.get(w_lower)
+        if st is None:
+            out["hint_message"] = (
+                "❌ Ce wallet n'est PAS dans la liste de surveillance du bot. "
+                "Cliquez sur 'Forcer re-détection' ou retirez/réajoutez le trader."
+            )
+            return out
+        out["watched"] = True
+        out["initialized"] = bool(getattr(st, "initialized", False))
+        out["known_positions"] = len(getattr(st, "positions", {}) or {})
+
+        # Compter les trades qu'on a copiés de ce wallet (= signaux convertis en trade)
+        async with async_session() as session:
+            n = await session.scalar(select(func.count(Trade.id)).where(
+                Trade.user_id == user.id,
+                Trade.master_wallet == w_lower,
+            )) or 0
+            out["signals_emitted_since_add"] = int(n)
+
+        if out["known_positions"] > 0 and out["signals_emitted_since_add"] == 0:
+            out["hint_message"] = (
+                f"⚠ Le bot a snapshoté {out['known_positions']} position(s) déjà ouverte(s) "
+                f"par ce trader au moment où vous l'avez ajouté. CES positions ne seront PAS "
+                f"copiées (sinon on copierait des trades vieux de plusieurs jours, à des prix "
+                f"obsolètes).\n\nLe bot copie SEULEMENT les NOUVEAUX trades qu'il fera à partir "
+                f"de maintenant. Si tu veux forcer la copie de toutes ses positions actuelles, "
+                f"clique sur 'Forcer re-détection'."
+            )
+        elif out["known_positions"] == 0 and out["signals_emitted_since_add"] == 0:
+            out["hint_message"] = (
+                "ℹ Le trader n'a aucune position ouverte actuellement. Le bot copiera dès "
+                "qu'il ouvrira un nouveau trade."
+            )
+        else:
+            out["hint_message"] = (
+                f"✅ Tout va bien. {out['signals_emitted_since_add']} trade(s) copié(s) "
+                f"de ce trader."
+            )
+    except Exception as e:
+        logger.warning(f"trader_monitor_state failed: {e}")
+        out["hint_message"] = f"⚠ Erreur diagnostic : {e}"
+    return out
+
+
+@router.post("/copy/traders/{wallet}/force-rescan")
+async def trader_force_rescan(wallet: str, user: User = Depends(get_current_user)):
+    """Reset du snapshot d'un wallet : efface les positions known.
+
+    Au prochain poll (1s par défaut), TOUTES ses positions actuelles seront
+    détectées comme NOUVELLES → le bot va générer des signaux BUY pour chacune.
+
+    ⚠ Use case : tu viens d'ajouter un trader avec des positions intéressantes,
+    tu veux les copier maintenant (au lieu d'attendre qu'il fasse de nouveaux
+    trades). Risque : tu copies des positions à des prix qui ont peut-être bougé.
+    """
+    w_lower = wallet.strip().lower()
+    try:
+        from bot.services import _registry as _svc_reg
+        if _svc_reg.monitor is None:
+            raise HTTPException(503, "Monitor non démarré")
+        states = getattr(_svc_reg.monitor, "_wallet_states", {}) or {}
+        st = states.get(w_lower)
+        if st is None:
+            # On force d'abord un refresh pour qu'il soit ajouté
+            await _svc_reg.monitor.refresh_watched_wallets()
+            st = states.get(w_lower)
+            if st is None:
+                raise HTTPException(404, "Wallet non suivi par cet user")
+        # Reset : on efface les positions, le prochain poll va tout détecter comme nouveau
+        st.positions = {}
+        st.initialized = False
+        logger.warning(
+            f"User {user.telegram_id}: force-rescan wallet {w_lower[:10]}... "
+            f"— next poll va re-emit toutes ses positions actuelles comme BUY"
+        )
+        return {
+            "ok": True,
+            "message": "Re-scan forcé. Au prochain poll (max 1s), toutes les positions actuelles seront détectées comme NOUVELLES et copiées.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"force_rescan failed: {e}")
+        raise HTTPException(500, str(e))
 
 
 @router.delete("/copy/traders/{wallet}")

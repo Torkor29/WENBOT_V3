@@ -1092,6 +1092,9 @@ route(/^copy\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
       ℹ Stats basées <b>uniquement</b> sur vos trades copiés de ce trader (pas sur son activité globale).
     </div>
 
+    <!-- 🔍 Diagnostic état du monitor pour CE wallet (chargé en async) -->
+    <div id="trader-monitor-state" style="margin-bottom:14px"></div>
+
     <!-- Générer un rapport pour ce trader -->
     <div class="section">
       <button class="btn btn-primary" onclick="window._reportForTrader('${wallet}')">
@@ -1146,7 +1149,61 @@ route(/^copy\/trader\/(0x[a-fA-F0-9]+)$/, async (m) => {
   setBack("copy/traders");
   // Async load markets (Polymarket API can be slow)
   window._loadTraderMarkets(wallet);
+  // Async load monitor state (diagnostic critique)
+  window._loadTraderMonitorState(wallet);
 }, {tab: "copy", back: "copy/traders"});
+
+/* ── Diagnostic : que sait le monitor de ce wallet ? ── */
+window._loadTraderMonitorState = async function(wallet) {
+  const el = document.getElementById("trader-monitor-state");
+  if (!el) return;
+  try {
+    const s = await api("/copy/traders/" + wallet + "/monitor-state");
+    const level = s.known_positions > 0 && s.signals_emitted_since_add === 0 ? "warning"
+                : !s.watched ? "error"
+                : "info";
+    const color = level === "warning" ? "#f59e0b"
+                : level === "error" ? "#ef4444"
+                : "#3b82f6";
+    const bg = level === "warning" ? "rgba(245,158,11,0.08)"
+             : level === "error" ? "rgba(239,68,68,0.08)"
+             : "rgba(59,130,246,0.08)";
+    const showForceBtn = s.watched && s.known_positions > 0 && s.signals_emitted_since_add === 0;
+    el.innerHTML = `
+      <div class="card" style="background:${bg};border:1px solid ${color}40">
+        <div style="font-size:13px;line-height:1.45;white-space:pre-wrap">${esc(s.hint_message || "")}</div>
+        <div class="small" style="margin-top:10px;opacity:0.65">
+          🔎 Surveillé : <b>${s.watched ? '✓' : '✗'}</b>
+          · Snapshot : <b>${s.initialized ? '✓' : '✗'}</b>
+          · Positions connues : <b>${s.known_positions}</b>
+          · Trades copiés : <b>${s.signals_emitted_since_add}</b>
+        </div>
+        ${showForceBtn ? `
+          <button class="btn btn-danger btn-sm" style="margin-top:10px" onclick="window._forceRescan('${wallet}')">
+            🔄 Forcer re-détection (copier les positions actuelles)
+          </button>
+        ` : ""}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="card"><div class="small">⚠ Diagnostic indisponible : ${esc(e.message)}</div></div>`;
+  }
+};
+
+window._forceRescan = async function(wallet) {
+  const ok = await confirmModal(
+    "🔄 Forcer la re-détection ?",
+    "Le bot va effacer son snapshot du trader et, au prochain poll (max 1s), va considérer TOUTES ses positions actuelles comme NOUVELLES → il va les copier immédiatement.\n\n⚠ Risques :\n• Tu vas potentiellement copier plein de trades d'un coup\n• Les prix peuvent avoir bougé depuis que le trader a ouvert la position\n• Vérifier que ton capital + max_trade_usdc + daily_limit sont configurés\n\nContinuer ?",
+    "Forcer re-détection",
+    "danger"
+  );
+  if (!ok) return;
+  try {
+    const r = await api("/copy/traders/" + wallet + "/force-rescan", {method:"POST"});
+    toast(r.message || "Re-scan déclenché ✓");
+    // Reload diagnostic après 2s (le temps que le poll détecte)
+    setTimeout(() => window._loadTraderMonitorState(wallet), 2000);
+  } catch (e) { toast(e.message, "error"); }
+};
 
 window._loadTraderMarkets = async function(wallet) {
   const el = document.getElementById("trader-markets-card");
