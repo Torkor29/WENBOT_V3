@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # reduce Polymarket API load if you watch 50+ wallets.
     monitor_poll_interval: int = Field(default=1, ge=1, le=120)
 
+    # SL/TP/trailing/time-exit check interval. Default 2s — marchés crypto 5m
+    # bougent en quelques secondes, attendre 15s pour vendre après un drop
+    # peut coûter énormément. Fetch prix batché par token (un seul call API
+    # par token unique, multi-users). Descendre à 1s possible si <50 positions
+    # ouvertes simultanément, remonter à 5-10s si rate-limit.
+    position_check_interval: int = Field(default=2, ge=1, le=60)
+
     # DB & Redis
     postgres_password: str = ""  # used by docker-compose for PostgreSQL container
     db_url: str = "sqlite+aiosqlite:///./polybot.db"

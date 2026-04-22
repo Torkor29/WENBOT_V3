@@ -324,10 +324,12 @@ async def main() -> None:
     market_intel = MarketIntelService(polymarket_client=polymarket_client)
 
     # Position manager (active SL/TP enforcement)
+    # check_interval = 2s par défaut (configurable via POSITION_CHECK_INTERVAL env)
+    # — critique pour les marchés volatils où 15s de lag sur un SL = gros slippage.
     position_manager = PositionManager(
         polymarket_client=polymarket_client,
         topic_router=topic_router,
-        check_interval=15,
+        check_interval=settings.position_check_interval,
     )
 
     # Portfolio manager (risk controls)

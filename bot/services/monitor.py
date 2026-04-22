@@ -58,7 +58,7 @@ class MultiMasterMonitor:
 
     def __init__(
         self,
-        poll_interval: int = 15,
+        poll_interval: int = 1,
         on_signal: Optional[Callable[[TradeSignal], Awaitable[None]]] = None,
     ):
         self._poll_interval = poll_interval

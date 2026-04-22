@@ -29,7 +29,7 @@ class PositionManager:
         self,
         polymarket_client=None,
         topic_router=None,
-        check_interval: int = 15,
+        check_interval: int = 2,
     ):
         self._pm = polymarket_client
         self._topic_router = topic_router
@@ -172,16 +172,25 @@ class PositionManager:
         if not positions:
             return
 
-        # Batch price fetches by token_id to minimize API calls
+        # Batch price fetches by token_id to minimize API calls — PARALLÈLE
+        # (séquentiel était un bottleneck qui pouvait dépasser check_interval).
         token_ids = list({p.token_id for p in positions})
-        prices = {}
-        for token_id in token_ids:
+        prices: dict = {}
+
+        async def _fetch_one(tid: str):
             try:
                 if self._pm:
-                    price = await self._pm.get_price(token_id, "SELL")
-                    prices[token_id] = price
+                    return tid, await self._pm.get_price(tid, "SELL")
             except Exception as e:
-                logger.debug("Failed to get price for %s: %s", token_id[:16], e)
+                logger.debug("Failed to get price for %s: %s", tid[:16], e)
+            return tid, None
+
+        if token_ids and self._pm:
+            results = await asyncio.gather(*[_fetch_one(t) for t in token_ids],
+                                           return_exceptions=True)
+            for r in results:
+                if isinstance(r, tuple) and r[1] is not None:
+                    prices[r[0]] = r[1]
 
         # Check each position
         for pos in positions:
