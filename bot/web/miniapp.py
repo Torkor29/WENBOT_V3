@@ -716,10 +716,9 @@ async def traders_add(body: TraderAddReq, user: User = Depends(get_current_user)
         "count": len(wallets),
         "message": "✅ Trader ajouté. Le bot va surveiller ses prochains trades.",
         "note": (
-            "⚠ IMPORTANT : le bot a snapshoté ses positions actuelles → ELLES NE SERONT PAS COPIÉES. "
-            "Seuls les NOUVEAUX trades qu'il fera à partir de maintenant déclencheront une copie. "
-            "Si tu veux copier ses positions actuelles immédiatement, va dans la fiche du trader "
-            "et clique sur '🔄 Forcer re-détection'."
+            "ℹ Les positions déjà ouvertes par ce trader ne seront pas copiées (elles datent "
+            "d'avant l'ajout). Seuls les NOUVEAUX trades qu'il fera à partir de maintenant "
+            "déclencheront une copie."
         ),
     }
 
@@ -771,12 +770,11 @@ async def trader_monitor_state(wallet: str, user: User = Depends(get_current_use
 
         if out["known_positions"] > 0 and out["signals_emitted_since_add"] == 0:
             out["hint_message"] = (
-                f"⚠ Le bot a snapshoté {out['known_positions']} position(s) déjà ouverte(s) "
-                f"par ce trader au moment où vous l'avez ajouté. CES positions ne seront PAS "
-                f"copiées (sinon on copierait des trades vieux de plusieurs jours, à des prix "
-                f"obsolètes).\n\nLe bot copie SEULEMENT les NOUVEAUX trades qu'il fera à partir "
-                f"de maintenant. Si tu veux forcer la copie de toutes ses positions actuelles, "
-                f"clique sur 'Forcer re-détection'."
+                f"ℹ Le bot a snapshoté {out['known_positions']} position(s) déjà ouverte(s) "
+                f"par ce trader au moment où vous l'avez ajouté. Ces positions-là ne seront PAS "
+                f"copiées (elles datent d'avant l'ajout, à des prix qui ne correspondent plus).\n\n"
+                f"Le bot copie uniquement les NOUVEAUX trades qu'il fera à partir de maintenant : "
+                f"nouvelle position, augmentation (≥0.1 share), vente partielle/totale."
             )
         elif out["known_positions"] == 0 and out["signals_emitted_since_add"] == 0:
             out["hint_message"] = (
