@@ -17,9 +17,10 @@ class Settings(BaseSettings):
     encryption_key: str = ""
 
     # Monitoring
-    # Default 2s for fast copy-trading. WebSocket handles instant detection;
-    # polling is the safety net. Set MONITOR_POLL_INTERVAL=1 for fastest.
-    monitor_poll_interval: int = Field(default=2, ge=1, le=120)
+    # Default 1s for sub-second copy-trading. WebSocket handles instant detection
+    # (~100-300ms); polling is the safety net. Set MONITOR_POLL_INTERVAL=2+ to
+    # reduce Polymarket API load if you watch 50+ wallets.
+    monitor_poll_interval: int = Field(default=1, ge=1, le=120)
 
     # DB & Redis
     postgres_password: str = ""  # used by docker-compose for PostgreSQL container

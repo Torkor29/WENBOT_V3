@@ -52,17 +52,20 @@ function timeAgo(iso) {
   return Math.floor(d/86400) + " j";
 }
 /** Latence d'exécution : temps entre détection du signal et exécution.
- *  Input : ms (int). Retourne "240 ms", "1.2 s", "—". */
+ *  Input : ms (int). Retourne "240 ms", "1.2 s", "—".
+ *  Bonus : ⚡ devant si sub-seconde. */
 function fmtLatency(ms) {
   if (ms == null) return "—";
-  if (ms < 1000) return `${ms} ms`;
+  const prefix = ms < 1000 ? "⚡ " : "";
+  if (ms < 1000) return `${prefix}${ms} ms`;
   if (ms < 60000) return `${(ms/1000).toFixed(1)} s`;
   return `${Math.floor(ms/60000)} min`;
 }
-/** Couleur selon latence : < 2s vert, 2-5s orange, > 5s rouge */
+/** Couleur selon latence : < 1s vert (objectif), 1-2s neutre, 2-5s orange, > 5s rouge */
 function latencyClass(ms) {
   if (ms == null) return "";
-  if (ms < 2000) return "pnl-pos";
+  if (ms < 1000) return "pnl-pos";
+  if (ms < 2000) return "";
   if (ms < 5000) return "";
   return "pnl-neg";
 }

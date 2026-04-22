@@ -704,40 +704,11 @@ class CopyTradeEngine:
                         await self._notify_error(user, signal, str(e))
                         return
 
-                # C3 FIX: Fee transfer AFTER successful trade execution
-                fee_tx_hash = None
-                if is_paper:
-                    fee_tx_hash = "paper_fee_simulated"
-                elif settings.collect_fees_onchain and settings.fees_wallet:
-                    # Use user's gas priority setting for faster confirmation
-                    from bot.models.settings import GasMode, GAS_PRIORITY_FEES
-                    user_gas_mode = getattr(user_settings, "gas_mode", GasMode.FAST)
-                    pf_gwei = GAS_PRIORITY_FEES.get(user_gas_mode, 30)
-
-                    try:
-                        transfer_result = await polygon_client.transfer_usdc(
-                            from_address=pk_addr,
-                            to_address=settings.fees_wallet,
-                            amount_usdc=fee_result.fee_amount,
-                            private_key=pk,
-                            priority_fee_gwei=pf_gwei,
-                        )
-                        if transfer_result.success:
-                            fee_tx_hash = transfer_result.tx_hash
-                            trade.fee_tx_hash = fee_tx_hash
-                        else:
-                            # Trade succeeded but fee failed — log but don't fail the trade
-                            logger.error(
-                                f"[{tg_id}] Fee transfer failed AFTER trade: "
-                                f"{transfer_result.error} — trade still valid"
-                            )
-                    except Exception as e:
-                        logger.error(
-                            f"[{tg_id}] Fee transfer error AFTER trade: {e} "
-                            f"— trade still valid"
-                        )
-
-                # Record fee
+                # ⚡ FAST MODE: fee record d'abord (sans tx_hash) → tx onchain en BACKGROUND
+                # Avant : on attendait wait_for_transaction_receipt (3-30s) avant de finaliser.
+                # Maintenant : on commit le trade immédiatement, le fee transfer s'exécute
+                # en tâche async, le tx_hash est mis à jour quand la confirmation arrive.
+                fee_tx_hash = "paper_fee_simulated" if is_paper else None
                 fee_record = FeeRecord(
                     user_id=user.id,
                     trade_id=trade.id,
@@ -747,32 +718,52 @@ class CopyTradeEngine:
                     net_amount=fee_result.net_amount,
                     fees_wallet=fee_result.fees_wallet,
                     tx_hash=fee_tx_hash,
-                    confirmed_on_chain=bool(fee_tx_hash and fee_tx_hash != "paper_fee_simulated"),
+                    confirmed_on_chain=is_paper,
                     is_paper=is_paper,
                 )
                 session.add(fee_record)
 
-                # Finalize
+                # Finalize trade NOW (sans attendre fee onchain)
                 elapsed = time.monotonic() - start_time
                 trade.execution_time_ms = int(elapsed * 1000)
                 trade.executed_at = datetime.utcnow()
-                # Only count daily spending for LIVE trades (paper has no limit)
                 if not is_paper:
                     user.daily_spent_usdc += fee_result.gross_amount
                 await session.commit()
+                trade_db_id = trade.id
+                fee_record_db_id = fee_record.id
 
-                # M3 FIX: Clear PK from memory after use
+                # ⚡ Fee transfer en BACKGROUND (LIVE only, pas paper)
+                if not is_paper and settings.collect_fees_onchain and settings.fees_wallet:
+                    from bot.models.settings import GasMode, GAS_PRIORITY_FEES
+                    user_gas_mode = getattr(user_settings, "gas_mode", GasMode.FAST)
+                    pf_gwei = GAS_PRIORITY_FEES.get(user_gas_mode, 30)
+                    # pk est un str (hex), str étant immutable on passe la ref ;
+                    # le bg task aura sa propre ref qui survivra au del local.
+                    pk_for_bg = pk
+                    asyncio.create_task(self._collect_fee_async(
+                        tg_id=tg_id,
+                        from_address=pk_addr,
+                        to_address=settings.fees_wallet,
+                        amount_usdc=fee_result.fee_amount,
+                        private_key=pk_for_bg,
+                        priority_fee_gwei=pf_gwei,
+                        trade_db_id=trade_db_id,
+                        fee_record_db_id=fee_record_db_id,
+                    ))
+
+                # M3 FIX: Clear PK from memory after use (bg task a sa propre copie)
                 if pk is not None:
                     del pk
                     pk = None
 
-                # ── V3: Per-event notification flags ──
+                # ── V3: Per-event notification flags — FIRE-AND-FORGET (non bloquant) ──
                 _side = (signal.side or "").upper()
                 _flag_attr = "notify_on_buy" if _side == "BUY" else "notify_on_sell"
                 if getattr(user_settings, _flag_attr, True):
-                    await self._notify_success(
+                    asyncio.create_task(self._notify_success(
                         user, trade, fee_result, elapsed, signal
-                    )
+                    ))
                 else:
                     logger.info(f"[{tg_id}] Notification {_side} skipped per user settings")
 
@@ -994,6 +985,66 @@ class CopyTradeEngine:
         if amount > user_settings.confirmation_threshold_usdc:
             return True
         return False
+
+    async def _collect_fee_async(
+        self,
+        tg_id: int,
+        from_address: str,
+        to_address: str,
+        amount_usdc: float,
+        private_key: str,
+        priority_fee_gwei: int,
+        trade_db_id: int,
+        fee_record_db_id: int,
+    ) -> None:
+        """Background fee transfer — runs after trade is finalized so we don't
+        block the user-perceived latency on Polygon block confirmation (3-30s).
+
+        Updates `trade.fee_tx_hash` and `fee_record.tx_hash` + `confirmed_on_chain`
+        when the receipt comes back. Logs and gives up on persistent failure
+        (the trade itself remains valid; we owe the platform a fee).
+        """
+        try:
+            transfer_result = await polygon_client.transfer_usdc(
+                from_address=from_address,
+                to_address=to_address,
+                amount_usdc=amount_usdc,
+                private_key=private_key,
+                priority_fee_gwei=priority_fee_gwei,
+            )
+            # pk is a str (immutable) — we cannot zeroize, just drop the ref
+            private_key = ""  # noqa: F841
+
+            if not transfer_result.success:
+                logger.error(
+                    f"[{tg_id}] Background fee transfer FAILED: "
+                    f"{transfer_result.error} — trade still valid (id={trade_db_id})"
+                )
+                return
+
+            # Update DB with the confirmed tx hash
+            async with async_session() as session:
+                from sqlalchemy import update as sa_update
+                await session.execute(
+                    sa_update(Trade)
+                    .where(Trade.id == trade_db_id)
+                    .values(fee_tx_hash=transfer_result.tx_hash)
+                )
+                await session.execute(
+                    sa_update(FeeRecord)
+                    .where(FeeRecord.id == fee_record_db_id)
+                    .values(tx_hash=transfer_result.tx_hash, confirmed_on_chain=True)
+                )
+                await session.commit()
+            logger.info(
+                f"[{tg_id}] ✅ Background fee transfer confirmed: "
+                f"{amount_usdc:.4f} USDC tx={transfer_result.tx_hash[:10]}..."
+            )
+        except Exception as e:
+            logger.error(
+                f"[{tg_id}] Background fee transfer ERROR: {e} "
+                f"— trade still valid (id={trade_db_id})"
+            )
 
     async def _notify_success(
         self,
