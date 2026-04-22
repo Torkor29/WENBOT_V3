@@ -336,14 +336,23 @@ async def diagnostic_copy_status(user: User = Depends(get_current_user)):
         else:
             checks.append({"status": "ok", "label": "Traders suivis", "message": f"{len(followed)} wallet(s)"})
 
-        # 5. Mode permissif
-        permissive = bool(getattr(s, "permissive_mode", False))
-        checks.append({
-            "status": "ok" if permissive else "warning",
-            "label": "Mode permissif",
-            "message": "🔓 ACTIF — tous filtres bypassés" if permissive else "OFF — filtres ci-dessous appliqués",
-            "fix": None if permissive else "POST /settings {permissive_mode:true}",
-        })
+        # 5. Mode permissif (+ check migration DB)
+        if not hasattr(s, "permissive_mode"):
+            checks.append({
+                "status": "blocker",
+                "label": "Migration DB",
+                "message": "Colonne `permissive_mode` absente — la migration n'a pas tourné. Restart le bot (docker compose restart bot).",
+                "fix": "docker compose restart bot",
+            })
+            permissive = False
+        else:
+            permissive = bool(getattr(s, "permissive_mode", False))
+            checks.append({
+                "status": "ok" if permissive else "warning",
+                "label": "Mode permissif",
+                "message": "🔓 ACTIF — tous filtres bypassés" if permissive else "OFF — filtres ci-dessous appliqués",
+                "fix": None if permissive else "POST /settings {permissive_mode:true}",
+            })
 
         # 6. Filtres bloquants (uniquement si permissive=False)
         if not permissive:

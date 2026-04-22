@@ -341,7 +341,7 @@ class CopyTradeEngine:
                     except Exception as e:
                         logger.warning("Portfolio check error (allowing): %s", e)
 
-                if user_settings.copy_delay_seconds > 0:
+                if user_settings.copy_delay_seconds > 0 and not permissive:
                     logger.debug(f"User {tg_id}: delaying {user_settings.copy_delay_seconds}s")
                     await asyncio.sleep(user_settings.copy_delay_seconds)
 
@@ -466,9 +466,21 @@ class CopyTradeEngine:
                             current_balance_usdc=balance,
                         )
                     except SizingError as e:
-                        logger.warning(f"[{tg_id}] ❌ Sizing error: {e}")
-                        await self._notify_error(user, signal, f"Erreur de sizing : {e}")
-                        return
+                        # En permissif : fallback à min_trade_usdc plutôt que reject
+                        if permissive:
+                            fallback = max(float(getattr(user_settings, "min_trade_usdc", 1.0) or 1.0), 1.0)
+                            gross_amount = min(fallback, balance) if balance > 0 else fallback
+                            logger.warning(
+                                f"[{tg_id}] 🔓 Sizing error en permissif → fallback {gross_amount:.2f}$ ({e})"
+                            )
+                            if gross_amount <= 0:
+                                logger.warning(f"[{tg_id}] Balance ≤ 0 même en fallback — skip")
+                                await self._notify_error(user, signal, "Balance insuffisante (0$)")
+                                return
+                        else:
+                            logger.warning(f"[{tg_id}] ❌ Sizing error: {e}")
+                            await self._notify_error(user, signal, f"Erreur de sizing : {e}")
+                            return
 
                     # Apply hot streak boost (BUY only)
                     if hot_boost > 1.0:
@@ -540,7 +552,7 @@ class CopyTradeEngine:
                     logger.error(f"Fee calculation error: {e}")
                     return
 
-                if self._needs_confirmation(user_settings, gross_amount):
+                if not permissive and self._needs_confirmation(user_settings, gross_amount):
                     reason = (
                         "Confirmation manuelle activée"
                         if user_settings.manual_confirmation
