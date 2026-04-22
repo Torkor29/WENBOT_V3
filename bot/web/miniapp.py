@@ -117,6 +117,10 @@ class SettingsUpdate(BaseModel):
     strategy_trade_fee_rate: Optional[float] = None
     strategy_max_trades_per_day: Optional[int] = None
     strategy_is_paused: Optional[bool] = None
+    # Permissive mode + idempotency + same-cat (anti-bloqueurs)
+    permissive_mode: Optional[bool] = None
+    idempotency_window_seconds: Optional[int] = None
+    max_same_category_positions: Optional[int] = None
 
 
 class ImportPkReq(BaseModel):
@@ -280,6 +284,139 @@ async def control_status(user: User = Depends(get_current_user)):
         "is_paused": user.is_paused,
         "paper_trading": user.paper_trading,
     }
+
+
+# ─────────────────────────────────────────────────────────────────
+# DIAGNOSTIC — "Pourquoi le bot ne copie-t-il rien ?"
+# ─────────────────────────────────────────────────────────────────
+@router.get("/diagnostic/copy-status")
+async def diagnostic_copy_status(user: User = Depends(get_current_user)):
+    """Scanne TOUS les bloqueurs potentiels de copie et renvoie un rapport.
+
+    Chaque check renvoie :
+      - status : "ok" | "warning" | "blocker"
+      - message : explication courte
+      - fix_action : (optionnel) clé d'un setting à toggler / endpoint
+    """
+    from sqlalchemy import select as _sel, func as _func
+    from datetime import date as _date
+    from bot.models.trade import Trade as _Trade, TradeStatus as _TS
+
+    checks: list[dict] = []
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == user.id))).scalar_one()
+        s = u.settings
+        if not s:
+            return {"checks": [{"status": "blocker", "label": "Settings", "message": "Aucun UserSettings — re-créez via /start"}]}
+
+        # 1. Bot global
+        if not u.is_active:
+            checks.append({"status": "blocker", "label": "Bot", "message": "Bot désactivé (is_active=False)", "fix": "POST /controls/resume"})
+        elif u.is_paused:
+            checks.append({"status": "blocker", "label": "Bot", "message": "Bot en pause", "fix": "POST /controls/resume"})
+        else:
+            checks.append({"status": "ok", "label": "Bot", "message": "Actif & non en pause"})
+
+        # 2. Wallet
+        if not u.wallet_address or not u.encrypted_private_key:
+            checks.append({"status": "blocker", "label": "Wallet", "message": "Aucun wallet configuré", "fix": "POST /wallet/create"})
+        else:
+            checks.append({"status": "ok", "label": "Wallet", "message": f"{u.wallet_address[:8]}…{u.wallet_address[-4:]}"})
+
+        # 3. Mode paper/live
+        if not u.paper_trading and not getattr(u, "live_mode_confirmed", False):
+            checks.append({"status": "blocker", "label": "Mode Live", "message": "paper_trading=False mais live_mode_confirmed=False — bascule silencieuse en paper à chaque trade", "fix": "POST /user/mode {paper_trading:false, confirm_live:true}"})
+        else:
+            checks.append({"status": "ok", "label": "Mode", "message": "Paper" if u.paper_trading else "LIVE confirmé"})
+
+        # 4. Followed wallets
+        followed = (s.followed_wallets or [])
+        if len(followed) == 0:
+            checks.append({"status": "blocker", "label": "Traders suivis", "message": "Aucun wallet suivi", "fix": "POST /copy/traders/add"})
+        else:
+            checks.append({"status": "ok", "label": "Traders suivis", "message": f"{len(followed)} wallet(s)"})
+
+        # 5. Mode permissif
+        permissive = bool(getattr(s, "permissive_mode", False))
+        checks.append({
+            "status": "ok" if permissive else "warning",
+            "label": "Mode permissif",
+            "message": "🔓 ACTIF — tous filtres bypassés" if permissive else "OFF — filtres ci-dessous appliqués",
+            "fix": None if permissive else "POST /settings {permissive_mode:true}",
+        })
+
+        # 6. Filtres bloquants (uniquement si permissive=False)
+        if not permissive:
+            if s.signal_scoring_enabled and (s.min_signal_score or 0) > 0:
+                checks.append({"status": "warning", "label": "Signal scoring", "message": f"ON — score min {s.min_signal_score:.0f}/100 (rejette coin flips ~30)", "fix": "POST /settings {signal_scoring_enabled:false}"})
+            if s.smart_filter_enabled:
+                checks.append({"status": "warning", "label": "Smart filter", "message": f"ON — skip_coin_flip={s.skip_coin_flip}, min_winrate={s.min_trader_winrate_for_type:.0f}%", "fix": "POST /settings {smart_filter_enabled:false}"})
+            if s.auto_pause_cold_traders:
+                checks.append({"status": "warning", "label": "Cold trader pause", "message": f"ON — bloque traders < {s.cold_trader_threshold:.0f}% WR sur 7j (rejette coin flippers)", "fix": "POST /settings {auto_pause_cold_traders:false}"})
+            if (s.max_positions or 15) <= 15:
+                checks.append({"status": "warning", "label": "Max positions", "message": f"Max {s.max_positions} positions ouvertes — peut bloquer si plein"})
+            if (getattr(s, "max_same_category_positions", 3) or 3) <= 3:
+                checks.append({"status": "warning", "label": "Max same-category", "message": f"Max {getattr(s, 'max_same_category_positions', 3)} positions/catégorie — bloque BTC 5m répétés"})
+            if s.manual_confirmation:
+                checks.append({"status": "warning", "label": "Manual confirmation", "message": "ON — chaque trade attend confirmation Telegram"})
+        else:
+            checks.append({"status": "ok", "label": "Filtres", "message": "Tous bypassés (mode permissif)"})
+
+        # 7. Idempotency window
+        idem = getattr(s, "idempotency_window_seconds", 60) or 60
+        if idem >= 300:
+            checks.append({"status": "warning", "label": "Anti-replay", "message": f"Fenêtre {idem}s — bloque les re-trades sur marchés courts (BTC 5m)", "fix": "POST /settings {idempotency_window_seconds:60}"})
+        else:
+            checks.append({"status": "ok", "label": "Anti-replay", "message": f"{idem}s — ok pour BTC 5m"})
+
+        # 8. Daily limit
+        today = _date.today()
+        daily_spent = await session.scalar(
+            _sel(_func.sum(_Trade.gross_amount_usdc)).where(
+                _Trade.user_id == u.id,
+                _Trade.side == TradeSide.BUY,
+                _Trade.status == _TS.FILLED,
+                _func.date(_Trade.created_at) == today,
+            )
+        ) or 0.0
+        if daily_spent >= (s.daily_limit_usdc or 0):
+            checks.append({"status": "blocker", "label": "Daily limit", "message": f"${daily_spent:.0f} dépensé / ${s.daily_limit_usdc:.0f} limite — atteinte", "fix": "POST /settings {daily_limit_usdc:5000}"})
+        else:
+            checks.append({"status": "ok", "label": "Daily limit", "message": f"${daily_spent:.0f} / ${s.daily_limit_usdc:.0f}"})
+
+        # 9. Sizing
+        if s.fixed_amount > (s.confirmation_threshold_usdc or 50) and s.manual_confirmation:
+            checks.append({"status": "warning", "label": "Sizing vs confirm", "message": f"fixed={s.fixed_amount}$ > seuil confirm {s.confirmation_threshold_usdc}$ → confirmation manuelle requise"})
+        if s.min_trade_usdc < 1.0:
+            checks.append({"status": "blocker", "label": "Min trade", "message": f"min_trade_usdc={s.min_trade_usdc}$ < 1$ (Polymarket exige $1 min)", "fix": "POST /settings {min_trade_usdc:1.0}"})
+
+        # 10. USDC balance live
+        if not u.paper_trading and u.wallet_address:
+            try:
+                bal = await web3_client.get_usdc_balance(u.wallet_address)
+                if bal < s.min_trade_usdc:
+                    checks.append({"status": "blocker", "label": "USDC", "message": f"Solde {bal:.2f}$ < min_trade {s.min_trade_usdc:.2f}$"})
+                else:
+                    checks.append({"status": "ok", "label": "USDC", "message": f"{bal:.2f}$"})
+                matic = await web3_client.get_matic_balance(u.wallet_address)
+                if matic < 0.01:
+                    checks.append({"status": "blocker", "label": "MATIC gas", "message": f"{matic:.4f} MATIC — insuffisant pour gas"})
+                else:
+                    checks.append({"status": "ok", "label": "MATIC", "message": f"{matic:.4f}"})
+            except Exception as e:
+                checks.append({"status": "warning", "label": "Balances", "message": f"Erreur fetch: {e}"})
+
+    # Synthèse
+    blockers = [c for c in checks if c["status"] == "blocker"]
+    warnings = [c for c in checks if c["status"] == "warning"]
+    summary = (
+        f"❌ {len(blockers)} bloqueur(s) trouvé(s) — corrigez-les en priorité"
+        if blockers
+        else f"✅ Aucun bloqueur. {len(warnings)} avertissement(s) (filtres actifs qui peuvent rejeter)"
+        if warnings
+        else "✅ Tout est vert — la copie devrait fonctionner"
+    )
+    return {"summary": summary, "blockers_count": len(blockers), "warnings_count": len(warnings), "checks": checks}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -975,6 +1112,8 @@ async def get_settings(user: User = Depends(get_current_user)):
             "notification_mode", "notify_on_buy", "notify_on_sell", "notify_on_sl_tp",
             # followed
             "followed_wallets",
+            # permissive mode + idempotency + same-cat (anti-bloqueurs)
+            "permissive_mode", "idempotency_window_seconds", "max_same_category_positions",
         ]:
             if hasattr(s, field):
                 val = getattr(s, field)

@@ -126,6 +126,10 @@ async def init_db() -> None:
             "ALTER TABLE user_settings ADD COLUMN notify_on_sl_tp BOOLEAN DEFAULT true",
             # Mini App notification feed (read marker)
             "ALTER TABLE users ADD COLUMN last_notif_seen_at TIMESTAMP",
+            # Permissive mode + idempotency window + same-cat cap (anti-bloqueurs silencieux)
+            "ALTER TABLE user_settings ADD COLUMN permissive_mode BOOLEAN DEFAULT false",
+            "ALTER TABLE user_settings ADD COLUMN idempotency_window_seconds INTEGER DEFAULT 60",
+            "ALTER TABLE user_settings ADD COLUMN max_same_category_positions INTEGER DEFAULT 3",
         ]
         for stmt in migrations:
             await _safe_add_column(conn, stmt)

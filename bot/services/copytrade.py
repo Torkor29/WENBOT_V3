@@ -156,15 +156,18 @@ class CopyTradeEngine:
                     return
 
                 user_settings = await get_or_create_settings(session, user)
+                permissive = bool(getattr(user_settings, "permissive_mode", False))
 
                 # ══════════════════════════════════════════════
                 # IDEMPOTENCY GATE: skip if same (user, market, token, side)
-                # already processed in last 5 minutes (anti-replay safety)
+                # already processed in last N seconds (anti-replay safety).
+                # Configurable via user_settings.idempotency_window_seconds (def 60s).
                 # ══════════════════════════════════════════════
                 from datetime import datetime as _dt, timedelta as _td
                 from sqlalchemy import select as _sel, func as _func
                 from bot.models.trade import Trade as _Trade
-                _cutoff = _dt.utcnow() - _td(minutes=5)
+                _idem_window = max(10, int(getattr(user_settings, "idempotency_window_seconds", 60) or 60))
+                _cutoff = _dt.utcnow() - _td(seconds=_idem_window)
                 _target_side = TradeSide.BUY if signal.side.upper() == "BUY" else TradeSide.SELL
                 _existing = await session.scalar(
                     _sel(_func.count(_Trade.id)).where(
@@ -178,7 +181,7 @@ class CopyTradeEngine:
                 if _existing and _existing > 0:
                     logger.info(
                         f"[{tg_id}] 🔁 Idempotent skip: same trade already processed "
-                        f"in last 5 min (market={signal.market_id[:12]}..., side={signal.side})"
+                        f"in last {_idem_window}s (market={signal.market_id[:12]}..., side={signal.side})"
                     )
                     return
 
@@ -198,6 +201,16 @@ class CopyTradeEngine:
                         user.paper_trading = True
                         is_paper = True
                         await session.commit()
+                        # Notif visible — l'user pensait être en live, il copie en fait en paper
+                        try:
+                            await self._notify_error(
+                                user, signal,
+                                "⚠️ Mode LIVE non confirmé — bascule sur PAPER\n\n"
+                                "Allez dans Wallet → 'Passer en Live' et confirmez explicitement "
+                                "pour exécuter de vrais trades on-chain.",
+                            )
+                        except Exception:
+                            pass
 
                     # Check 2: must have encrypted PK for live
                     if not is_paper and not user.encrypted_private_key:
@@ -208,14 +221,24 @@ class CopyTradeEngine:
                         is_paper = True
                         await session.commit()
 
-                if not await self._passes_filters(user_settings, signal):
-                    logger.info(f"User {tg_id}: signal filtered out by settings")
-                    return
+                # En mode permissif, on saute _passes_filters (categories,
+                # max_expiry, blacklist marché reste actif via _passes_filters_min)
+                if permissive:
+                    # Seul le blacklist marché reste actif (sécurité minimale user)
+                    if user_settings.blacklisted_markets and signal.market_id in user_settings.blacklisted_markets:
+                        logger.info(f"[{tg_id}] permissive: blacklist marché bloque {signal.market_id[:12]}…")
+                        return
+                    logger.info(f"[{tg_id}] 🔓 PERMISSIVE MODE — bypass filters/scoring/smart/portfolio/cold")
+                else:
+                    if not await self._passes_filters(user_settings, signal):
+                        logger.info(f"User {tg_id}: signal filtered out by settings")
+                        return
 
                 # ── V3 Checkpoint 1: Signal Score threshold ──
                 v3_score = getattr(signal, "_v3_score", None)
                 if (
-                    v3_score
+                    not permissive
+                    and v3_score
                     and getattr(user_settings, "signal_scoring_enabled", False)
                 ):
                     min_score = getattr(user_settings, "min_signal_score", 40.0)
@@ -242,8 +265,8 @@ class CopyTradeEngine:
                         )
                         return
 
-                # ── V3 Checkpoint 2: Smart Filter ──
-                if self._smart_filter:
+                # ── V3 Checkpoint 2: Smart Filter (skip si permissive) ──
+                if self._smart_filter and not permissive:
                     try:
                         should_copy, reason = await self._smart_filter.should_copy(
                             signal, user_settings
@@ -278,8 +301,8 @@ class CopyTradeEngine:
                     except Exception as e:
                         logger.warning("Smart filter error (allowing): %s", e)
 
-                # ── V3 Checkpoint 3: Portfolio risk check ──
-                if self._portfolio_manager and signal.side == "BUY":
+                # ── V3 Checkpoint 3: Portfolio risk check (skip si permissive) ──
+                if self._portfolio_manager and signal.side == "BUY" and not permissive:
                     try:
                         from bot.services.market_categories import categorize_market
                         market_cat = categorize_market(
@@ -299,6 +322,7 @@ class CopyTradeEngine:
                             max_direction_bias_pct=getattr(
                                 user_settings, "max_direction_bias_pct", 70.0
                             ),
+                            max_same_category=getattr(user_settings, "max_same_category_positions", 3),
                         )
                         if not allowed:
                             logger.info(
@@ -373,8 +397,8 @@ class CopyTradeEngine:
                 hot_boost = 1.0
                 if self._trader_tracker and signal.master_wallet:
                     try:
-                        # Auto-pause if trader is cold and user opted in
-                        if getattr(user_settings, "auto_pause_cold_traders", False):
+                        # Auto-pause if trader is cold and user opted in (skip si permissive)
+                        if not permissive and getattr(user_settings, "auto_pause_cold_traders", False):
                             is_cold = await self._trader_tracker.check_auto_pause(signal.master_wallet)
                             if is_cold:
                                 logger.info(

@@ -145,6 +145,25 @@ class UserSettings(Base):
     notify_on_sell: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_sl_tp: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # ── Mode permissif : COPIE TOUT, bypass tous les checks ────────
+    # Quand True, le moteur skip TOUS ces checks au runtime :
+    #   - signal_scoring, smart_filter, skip_coin_flip
+    #   - auto_pause_cold_traders
+    #   - portfolio manager (max positions, dup market, same-cat, direction bias)
+    #   - manual_confirmation
+    # Reste actif : balance USDC, gas MATIC, daily_limit, max_trade_usdc, blacklist marché
+    permissive_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Idempotency window (anti-replay) — par défaut 60s. Pour les traders
+    # qui font tourner les BTC 5m, on veut une fenêtre courte. Pour les
+    # markets longs (élections, etc.) on peut monter à 300s pour éviter
+    # les doublons sur des positions qui s'incrémentent.
+    idempotency_window_seconds: Mapped[int] = mapped_column(Integer, default=60)
+
+    # Max positions sur la même sous-catégorie (BTC, NFL, etc.)
+    # Hardcoded à 3 historiquement, maintenant configurable. 999 = illimité.
+    max_same_category_positions: Mapped[int] = mapped_column(Integer, default=3)
+
     # Relationship
     user: Mapped["User"] = relationship("User", back_populates="settings")
 

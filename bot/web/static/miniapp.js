@@ -1516,10 +1516,11 @@ route(/^more\/settings$/, async () => {
       <div class="card-title">🎚 Raccourcis</div>
       <div class="small" style="margin-bottom:10px">Change tous les filtres en un clic selon ton style.</div>
       <div class="btn-row">
-        <button class="btn btn-primary btn-sm" onclick="window._permissiveMode()">🔓 Copier TOUT</button>
+        <button class="btn ${s.permissive_mode?'btn-success':'btn-primary'} btn-sm" onclick="window._permissiveMode()">${s.permissive_mode?'🔓 Mode permissif ACTIF':'🔓 Activer mode permissif'}</button>
+        <button class="btn btn-secondary btn-sm" onclick="window._diagCopy()">🩺 Pourquoi pas copié ?</button>
         <button class="btn btn-danger btn-sm" onclick="window._resetSettings()">♻️ Restaurer défauts</button>
       </div>
-      <div class="small" style="margin-top:8px">🔓 Désactive tous les filtres (copie chaque signal). ♻️ Remet les valeurs recommandées.</div>
+      <div class="small" style="margin-top:8px">🔓 Active un flag DB qui bypass <b>tous</b> les checks (scoring, smart filter, cold trader, portfolio). 🩺 Liste les bloqueurs actifs sur ton compte.</div>
     </div>
 
     <details class="card" open>
@@ -1751,27 +1752,60 @@ window._applyProfile = async function(profile) {
 window._permissiveMode = async function() {
   const ok = await confirmModal(
     "🔓 Mode permissif ?",
-    "Désactive TOUS les filtres (scoring, smart filter, auto-pause cold traders, coin-flip, etc.).\n\nLe bot copiera TOUS les signaux de vos traders suivis sans aucune restriction.\n\n⚠ Assurez-vous de limiter max_trade_usdc et daily_limit_usdc pour maîtriser le risque.\n\nConfirmer ?",
+    "Active le flag DB `permissive_mode` qui bypass à l'exécution :\n• Signal scoring (V3)\n• Smart filter (winrate, conviction, drift)\n• Skip coin flip\n• Auto-pause cold traders\n• Portfolio manager (max positions, dup market, same-cat, direction bias)\n• Confirmation manuelle\n\n✅ Le bot copiera TOUS les signaux de vos traders suivis.\n\nReste actif (sécurité minimale) :\n• Balance USDC + MATIC gas\n• Daily limit + max_trade_usdc\n• Blacklist marché (par marché bloqué manuellement)\n• Idempotency window (anti double-trade dans la même seconde)\n\n⚠ Configurez bien `max_trade_usdc` + `daily_limit_usdc` pour maîtriser le risque.",
     "Activer mode permissif"
   );
   if (!ok) return;
   try {
-    // Turn off all filter-like toggles in one go
+    // Active le flag DB ET réduit l'idempotency à 60s + max_same_cat à 999 (pour BTC 5m)
     await api("/settings", {method:"POST", body:{
+      permissive_mode: true,
       signal_scoring_enabled: false,
       smart_filter_enabled: false,
       skip_coin_flip: false,
       auto_pause_cold_traders: false,
       manual_confirmation: false,
-      stop_loss_enabled: false,
-      take_profit_enabled: false,
-      trailing_stop_enabled: false,
-      time_exit_enabled: false,
-      scale_out_enabled: false,
+      idempotency_window_seconds: 60,
+      max_same_category_positions: 999,
     }});
-    toast("🔓 Mode permissif activé — tous filtres OFF");
+    toast("🔓 Mode permissif ACTIF — tous filtres bypassés");
     dispatch();
   } catch (e) { toast(e.message, "error"); }
+};
+
+/* 🩺 Diagnostic — modale qui montre tous les bloqueurs */
+window._diagCopy = async function() {
+  const bd = document.createElement("div");
+  bd.className = "sheet-backdrop";
+  bd.innerHTML = `<div class="sheet"><div class="loading"><div class="spinner"></div>Diagnostic en cours…</div></div>`;
+  document.body.appendChild(bd);
+  bd.addEventListener("click", e => { if (e.target === bd) bd.remove(); });
+  try {
+    const d = await api("/diagnostic/copy-status");
+    const iconFor = c => c.status === "ok" ? "✅" : c.status === "warning" ? "⚠️" : "❌";
+    const colorFor = c => c.status === "ok" ? "var(--ok,#4ade80)" : c.status === "warning" ? "var(--warn,#f59e0b)" : "var(--red,#ef4444)";
+    bd.innerHTML = `
+      <div class="sheet" style="max-height:85vh;overflow-y:auto">
+        <h3>🩺 Diagnostic copy</h3>
+        <div class="alert ${d.blockers_count > 0 ? 'warning' : 'info'}" style="margin-bottom:14px">
+          <p>${esc(d.summary)}</p>
+        </div>
+        ${d.checks.map(c => `
+          <div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+            <div style="font-size:18px">${iconFor(c)}</div>
+            <div style="flex:1">
+              <div style="font-weight:600;color:${colorFor(c)}">${esc(c.label)}</div>
+              <div class="small" style="margin-top:2px">${esc(c.message)}</div>
+              ${c.fix ? `<div class="small" style="margin-top:4px;opacity:0.6;font-family:monospace">→ ${esc(c.fix)}</div>` : ""}
+            </div>
+          </div>`).join("")}
+        <button class="btn btn-primary" id="diag-close" style="margin-top:14px">Fermer</button>
+      </div>`;
+    bd.querySelector("#diag-close").onclick = () => bd.remove();
+  } catch (e) {
+    bd.innerHTML = `<div class="sheet"><h3>🩺 Diagnostic</h3><div class="alert"><p>Erreur: ${esc(e.message)}</p></div><button class="btn btn-primary" id="x">Fermer</button></div>`;
+    bd.querySelector("#x").onclick = () => bd.remove();
+  }
 };
 
 window._resetSettings = async function() {

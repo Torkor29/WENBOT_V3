@@ -39,6 +39,7 @@ class PortfolioManager:
         max_positions: int = 15,
         max_category_exposure_pct: float = 30.0,
         max_direction_bias_pct: float = 70.0,
+        max_same_category: int = 3,
     ) -> tuple[bool, str]:
         """Pre-trade check: can this user open a new position?
 
@@ -76,18 +77,18 @@ class PortfolioManager:
                     f"(max {max_direction_bias_pct:.0f}%)",
                 )
 
-        # 5. Correlation check — max 3 positions in same subcategory
-        if category and positions:
+        # 5. Correlation check — max N positions in same subcategory (configurable)
+        if category and positions and max_same_category < 999:
             same_cat_count = sum(
                 1
                 for p in positions
                 if self._get_position_category(p) == category
             )
-            if same_cat_count >= 3:
+            if same_cat_count >= max_same_category:
                 return (
                     False,
                     f"Already have {same_cat_count} positions in '{category}' "
-                    f"(max 3 correlated)",
+                    f"(max {max_same_category} correlated)",
                 )
 
         return True, "OK"

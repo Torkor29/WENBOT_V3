@@ -9,8 +9,10 @@ from bot.services.polymarket import polymarket_client, Position
 
 logger = logging.getLogger(__name__)
 
-# Ignore new positions smaller than this (in shares) to avoid dust
-MIN_SIGNAL_SIZE = 0.5
+# Ignore new positions smaller than this (in shares) to avoid dust.
+# 0.1 share @ price 0.50 ≈ $0.05 — assez bas pour capter les coin flips
+# (BTC Up/Down 5m typiquement size=2-10 shares) sans noyer les logs de dust.
+MIN_SIGNAL_SIZE = 0.1
 
 
 @dataclass
