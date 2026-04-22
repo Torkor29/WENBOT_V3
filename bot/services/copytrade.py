@@ -75,6 +75,11 @@ class CopyTradeEngine:
         self._trader_tracker = trader_tracker
         self._topic_router = topic_router
 
+        # Lock par (user_id, token_id) pour éviter qu'un BUY soit traité 2 fois
+        # en parallèle si 2 signaux sur le même token arrivent dans la fenêtre
+        # d'idempotency (race condition lecture/écriture DB).
+        self._user_token_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
     async def handle_signal(self, signal: TradeSignal) -> None:
         """Process a trade signal — only for followers of signal.master_wallet."""
         logger.info(
@@ -132,7 +137,22 @@ class CopyTradeEngine:
     async def _process_follower(
         self, user: User, signal: TradeSignal, master_portfolio_usdc: float
     ) -> None:
-        """Process a trade signal for a single follower."""
+        """Process a trade signal for a single follower (wrapper avec lock)."""
+        # 🔒 Sérialise les signaux concurrents sur le même (user, token) pour
+        # éviter race entre 2 BUY simultanés (idempotency check faux negative).
+        # Granularité fine : un user peut traiter en parallèle plusieurs tokens.
+        lock_key = (user.id, signal.token_id or "")
+        lock = self._user_token_locks.get(lock_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._user_token_locks[lock_key] = lock
+        async with lock:
+            await self._process_follower_locked(user, signal, master_portfolio_usdc)
+
+    async def _process_follower_locked(
+        self, user: User, signal: TradeSignal, master_portfolio_usdc: float
+    ) -> None:
+        """Vraie logique de traitement d'un signal pour un follower (sous lock)."""
         trade_id = f"ct-{uuid.uuid4().hex[:12]}"
         start_time = time.monotonic()
         tg_id = user.telegram_id
@@ -176,6 +196,9 @@ class CopyTradeEngine:
                         _Trade.token_id == signal.token_id,
                         _Trade.side == _target_side,
                         _Trade.created_at >= _cutoff,
+                        # Exclure les trades échoués : sinon un fail verrouille l'user
+                        # 60s sur ce token, alors que le retry serait légitime.
+                        _Trade.status != TradeStatus.FAILED,
                     )
                 )
                 if _existing and _existing > 0:
@@ -660,6 +683,15 @@ class CopyTradeEngine:
                                     f"{avg_entry:.4f}) × {trade.shares:.2f} = "
                                     f"{realized:+.2f} USDC"
                                 )
+                            # 🔧 BUG FIX : marque la position active comme partiellement
+                            # ou totalement fermée (sinon SL/TP fantôme continuera à
+                            # monitorer un token déjà vendu).
+                            await self._close_or_reduce_active_position(
+                                session, user.id, signal.token_id,
+                                shares_sold=float(trade.shares or 0),
+                                close_price=float(signal.price or 0),
+                                close_reason="copied_master_sell",
+                            )
                         except Exception as _e:
                             logger.warning(f"[{tg_id}] Realized PnL calc failed: {_e}")
                     # ⏱ PAPER : fige la latence de copie après tout le bloc paper
@@ -709,6 +741,13 @@ class CopyTradeEngine:
                                             f"({signal.price:.4f} - {avg_entry:.4f}) × "
                                             f"{trade.shares:.2f} = {realized:+.2f} USDC"
                                         )
+                                    # 🔧 BUG FIX : ferme/réduit la position active
+                                    await self._close_or_reduce_active_position(
+                                        session, user.id, signal.token_id,
+                                        shares_sold=float(trade.shares or 0),
+                                        close_price=float(signal.price or 0),
+                                        close_reason="copied_master_sell",
+                                    )
                                 except Exception as _e:
                                     logger.warning(f"[{tg_id}] Realized PnL calc failed: {_e}")
                         else:
@@ -827,6 +866,7 @@ class CopyTradeEngine:
                             sl_pct=sl_pct,
                             tp_pct=tp_pct,
                             trailing_stop_pct=trailing,
+                            is_paper=is_paper,
                         )
                     except Exception as e:
                         logger.warning("Failed to register position for monitoring: %s", e)
@@ -1011,6 +1051,68 @@ class CopyTradeEngine:
         if amount > user_settings.confirmation_threshold_usdc:
             return True
         return False
+
+    async def _close_or_reduce_active_position(
+        self,
+        session: AsyncSession,
+        user_id: int,
+        token_id: str,
+        shares_sold: float,
+        close_price: float,
+        close_reason: str,
+    ) -> None:
+        """Réduit ou ferme la (les) ActivePosition de cet user pour ce token.
+
+        Si plusieurs positions ouvertes existent (cas rare : DCA sur plusieurs
+        BUY copy), on consomme dans l'ordre FIFO : on réduit la plus ancienne
+        d'abord, puis la suivante, etc., jusqu'à avoir absorbé `shares_sold`.
+
+        Si la dernière position est entièrement consommée → is_closed=True.
+        Si partiellement consommée → on décrémente shares.
+
+        Sans ce helper, le PositionManager continuerait à monitorer la position
+        après un SELL → SL/TP fantôme = ordre dupliqué.
+        """
+        if shares_sold <= 0 or not token_id:
+            return
+        try:
+            from bot.models.active_position import ActivePosition
+            from sqlalchemy import select as _sel_ap, update as _upd_ap
+            rows = (await session.execute(
+                _sel_ap(ActivePosition).where(
+                    ActivePosition.user_id == user_id,
+                    ActivePosition.token_id == token_id,
+                    ActivePosition.is_closed == False,  # noqa: E712
+                ).order_by(ActivePosition.opened_at.asc())
+            )).scalars().all()
+            remaining = float(shares_sold)
+            for ap in rows:
+                if remaining <= 0:
+                    break
+                ap_shares = float(ap.shares or 0)
+                if ap_shares <= remaining + 1e-6:
+                    # Position entièrement consommée
+                    ap.is_closed = True
+                    ap.close_reason = close_reason
+                    ap.close_price = close_price
+                    ap.closed_at = datetime.utcnow()
+                    if ap.entry_price > 0:
+                        ap.pnl_pct = ((close_price - ap.entry_price) / ap.entry_price) * 100
+                    remaining -= ap_shares
+                    logger.info(
+                        f"[user={user_id}] ActivePosition {ap.id} CLOSED "
+                        f"({ap_shares:.4f} sh @ {close_price:.4f}, reason={close_reason})"
+                    )
+                else:
+                    # Position partiellement réduite
+                    ap.shares = ap_shares - remaining
+                    logger.info(
+                        f"[user={user_id}] ActivePosition {ap.id} REDUCED "
+                        f"({ap_shares:.4f} → {ap.shares:.4f} sh)"
+                    )
+                    remaining = 0
+        except Exception as e:
+            logger.warning(f"_close_or_reduce_active_position failed: {e}")
 
     async def _collect_fee_async(
         self,

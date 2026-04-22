@@ -386,14 +386,20 @@ async def main() -> None:
                     logger.error("User not found for exit: user_id=%d", user_id)
                     return
 
-                if user.paper_trading:
+                # 🔧 BUG FIX : utiliser le mode du trade ORIGINAL (position.is_paper)
+                # et PAS user.paper_trading actuel. L'user peut avoir basculé
+                # paper→live entre temps : on ne doit pas placer un VRAI ordre
+                # pour une position fictive paper (ni l'inverse).
+                trade_was_paper = bool(getattr(position, "is_paper", user.paper_trading))
+
+                if trade_was_paper:
                     # Paper mode: credit back the proceeds
                     proceeds = position.shares * position.current_price
                     user.paper_balance += proceeds
                     await session.commit()
                     logger.info(
-                        "Paper exit: user=%d proceeds=%.2f balance=%.2f",
-                        user_id, proceeds, user.paper_balance,
+                        "Paper exit (was_paper=%s): user=%d proceeds=%.2f balance=%.2f",
+                        trade_was_paper, user_id, proceeds, user.paper_balance,
                     )
                     return
 

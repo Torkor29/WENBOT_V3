@@ -42,6 +42,11 @@ class ActivePosition(Base):
     close_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pnl_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # Mode au moment de la création — utilisé par le exit callback pour
+    # respecter le mode du trade d'origine (et pas le mode actuel de l'user
+    # qui peut avoir basculé entre temps de paper à live).
+    is_paper: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Timing
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_checked: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

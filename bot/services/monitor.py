@@ -9,12 +9,11 @@ from bot.services.polymarket import polymarket_client, Position
 
 logger = logging.getLogger(__name__)
 
-# Ignore new positions smaller than this (in shares) to avoid dust.
-# 0.1 share @ price 0.50 ≈ $0.05 — assez bas pour capter les coin flips
-# (BTC Up/Down 5m typiquement size=2-10 shares) sans noyer les logs de dust.
-# Filtre dust technique uniquement (anti-flickering quand Polymarket renvoie
-# des floats imprécis). NE PAS utiliser pour filtrer la "qualité" — c'est le
-# rôle du setting user `min_master_share_size` (défaut 0 = OFF).
+# Filtre dust technique uniquement — ignore les variations de position
+# < 0.01 share dues à l'imprécision des floats côté API Polymarket.
+# 0.01 share @ $0.30 = $0.003, soit techniquement rien.
+# NE PAS utiliser pour filtrer la qualité — c'est le rôle du setting user
+# `min_master_share_size` (défaut 0 = OFF, configurable dans la mini-app).
 MIN_SIGNAL_SIZE = 0.01
 
 

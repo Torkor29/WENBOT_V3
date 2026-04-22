@@ -80,10 +80,13 @@ class PositionManager:
         sl_pct: Optional[float] = None,
         tp_pct: Optional[float] = None,
         trailing_stop_pct: Optional[float] = None,
+        is_paper: bool = False,
     ) -> ActivePosition:
         """Register a new position for monitoring.
 
         SL/TP prices are computed from entry_price and user settings.
+        is_paper : si True, le exit callback ne place pas d'ordre on-chain
+        (utilise la balance paper).
         """
         sl_price = None
         if sl_pct is not None and sl_pct > 0:
@@ -107,6 +110,7 @@ class PositionManager:
             sl_price=sl_price,
             tp_price=tp_price,
             trailing_stop_pct=trailing_stop_pct,
+            is_paper=is_paper,
             opened_at=utcnow(),
             last_checked=utcnow(),
         )
