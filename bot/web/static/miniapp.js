@@ -51,6 +51,21 @@ function timeAgo(iso) {
   if (d < 86400) return Math.floor(d/3600) + " h";
   return Math.floor(d/86400) + " j";
 }
+/** Latence d'exécution : temps entre détection du signal et exécution.
+ *  Input : ms (int). Retourne "240 ms", "1.2 s", "—". */
+function fmtLatency(ms) {
+  if (ms == null) return "—";
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60000) return `${(ms/1000).toFixed(1)} s`;
+  return `${Math.floor(ms/60000)} min`;
+}
+/** Couleur selon latence : < 2s vert, 2-5s orange, > 5s rouge */
+function latencyClass(ms) {
+  if (ms == null) return "";
+  if (ms < 2000) return "pnl-pos";
+  if (ms < 5000) return "";
+  return "pnl-neg";
+}
 function copy(text) { navigator.clipboard?.writeText(text).then(() => toast("Copié")); haptic("light"); }
 
 function toast(msg, type="success") {
@@ -969,6 +984,10 @@ window._loadPositions = async function() {
             <div class="list-title">${esc(p.market_question)}</div>
             <div class="list-sub">${p.shares.toFixed(2)} sh · entry ${p.entry_price.toFixed(4)} → ${p.current_price.toFixed(4)} ${p.live?'🟢':''}</div>
             <div class="list-sub">${p.master_wallet}${p.is_paper ? ' · ' + badge("PAPER","orange") : ''}</div>
+            <div class="list-sub" style="opacity:0.65">
+              🕐 ${timeAgo(p.created_at)}
+              ${p.execution_time_ms != null ? `· 🚀 latence <span class="${latencyClass(p.execution_time_ms)}">${fmtLatency(p.execution_time_ms)}</span>` : ""}
+            </div>
           </div>
           <div class="list-right">
             <div class="${pnlClass(p.unrealized_pnl)}" style="font-weight:700;font-size:15px">${pnlSign(p.unrealized_pnl)}</div>
@@ -1002,6 +1021,7 @@ route(/^copy\/history$/, async () => {
             <div class="list-body">
               <div class="list-title">${esc(t.market_question)}</div>
               <div class="list-sub">${t.shares.toFixed(1)} @ ${t.price.toFixed(4)} · ${t.master_wallet} · ${timeAgo(t.created_at)}</div>
+              ${t.execution_time_ms != null ? `<div class="list-sub" style="opacity:0.65">🚀 latence <span class="${latencyClass(t.execution_time_ms)}">${fmtLatency(t.execution_time_ms)}</span></div>` : ""}
             </div>
             <div class="list-right">
               ${t.settlement_pnl !== null ? `<div class="${pnlClass(t.settlement_pnl)}" style="font-weight:600">${pnlSign(t.settlement_pnl)}</div>` : `<div>${fmtUsd(t.amount)}</div>`}
@@ -1512,15 +1532,24 @@ route(/^more\/settings$/, async () => {
       • Pour copier <b>tout</b> sans filtre : cliquez <b>🔓 Mode permissif</b> plus bas</p>
     </div>
 
-    <div class="card" style="margin-bottom:14px">
-      <div class="card-title">🎚 Raccourcis</div>
-      <div class="small" style="margin-bottom:10px">Change tous les filtres en un clic selon ton style.</div>
-      <div class="btn-row">
-        <button class="btn ${s.permissive_mode?'btn-success':'btn-primary'} btn-sm" onclick="window._permissiveMode()">${s.permissive_mode?'🔓 Mode permissif ACTIF':'🔓 Activer mode permissif'}</button>
-        <button class="btn btn-secondary btn-sm" onclick="window._diagCopy()">🩺 Pourquoi pas copié ?</button>
-        <button class="btn btn-danger btn-sm" onclick="window._resetSettings()">♻️ Restaurer défauts</button>
+    <div class="card shortcuts-card" style="margin-bottom:14px">
+      <div class="card-title">🎛 Raccourcis</div>
+
+      <div class="permissive-row ${s.permissive_mode?'is-on':''}" onclick="window._togglePermissive(${!s.permissive_mode})">
+        <div class="permissive-icon">${s.permissive_mode?'🔓':'🔒'}</div>
+        <div class="permissive-body">
+          <div class="permissive-title">Mode permissif</div>
+          <div class="permissive-sub">${s.permissive_mode
+            ? '✅ ACTIF — tous les filtres sont bypassés, le bot copie tout'
+            : 'OFF — les filtres ci-dessous sont appliqués'}</div>
+        </div>
+        <div class="toggle"><input type="checkbox" ${s.permissive_mode?'checked':''}><span class="slider"></span></div>
       </div>
-      <div class="small" style="margin-top:8px">🔓 Active un flag DB qui bypass <b>tous</b> les checks (scoring, smart filter, cold trader, portfolio). 🩺 Liste les bloqueurs actifs sur ton compte.</div>
+
+      <div class="btn-row cols-2" style="margin-top:12px">
+        <button class="btn btn-secondary btn-sm" onclick="window._diagCopy()">🩺 Pourquoi pas copié ?</button>
+        <button class="btn btn-ghost btn-sm" onclick="window._resetSettings()">♻️ Restaurer défauts</button>
+      </div>
     </div>
 
     <details class="card" open>
@@ -1544,10 +1573,32 @@ route(/^more\/settings$/, async () => {
          {value:"proportional", label:"📏 Proportionnel — copie la proportion du master"},
          {value:"kelly", label:"🧠 Kelly — formule mathématique (avancé)"}],
         hint("Fixe pour débuter", "Fixe = prévisible. Proportionnel = on mime vraiment le master mais tailles variables. Kelly = rareté mathématique."), true)}
-      ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000,
-        hint("5-10 USDC pour débuter", "Requis si mode FIXE. Débutant → 2-5. Confiant → 10-50. Chaque trade fera ce montant précis."), true)}
-      ${num("percent_per_trade", "% du capital par trade", s.percent_per_trade, 0.5, 0.1, 100,
-        hint("2-5%", "Requis si mode PERCENT. Augmentez si peu de traders suivis (concentré). Diminuez si beaucoup (risque dispersé)."))}
+
+      <!-- Mode FIXE -->
+      <div class="dep-group" data-depends-on-value="sizing_mode=fixed">
+        ${num("fixed_amount", "Montant fixe USDC", s.fixed_amount, 0.5, 0.1, 1000,
+          hint("5-10 USDC pour débuter", "Chaque trade fera ce montant précis. Débutant → 2-5. Confiant → 10-50."), true)}
+      </div>
+
+      <!-- Mode PERCENT -->
+      <div class="dep-group" data-depends-on-value="sizing_mode=percent">
+        ${num("percent_per_trade", "% du capital par trade", s.percent_per_trade, 0.5, 0.1, 100,
+          hint("2-5%", "Augmentez si peu de traders suivis (concentré). Diminuez si beaucoup (risque dispersé)."), true)}
+      </div>
+
+      <!-- Mode PROPORTIONAL -->
+      <div class="dep-group" data-depends-on-value="sizing_mode=proportional">
+        ${num("proportional_factor", "Facteur de proportion", s.proportional_factor || 1.0, 0.1, 0.01, 10,
+          hint("1.0", "Le bot fait `master_amount × facteur × (votre_capital ÷ master_capital)`. Ajustez pour scaler la copie."))}
+      </div>
+
+      <!-- Mode KELLY -->
+      <div class="dep-group" data-depends-on-value="sizing_mode=kelly">
+        ${num("kelly_fraction", "Fraction de Kelly", s.kelly_fraction || 0.25, 0.05, 0.05, 1.0,
+          hint("0.25 (Kelly/4)", "0.25 = recommandé. 1.0 = full Kelly (très agressif)."))}
+      </div>
+
+      <div style="height:6px"></div>
       ${num("multiplier", "Multiplicateur global", s.multiplier, 0.1, 0.1, 10,
         hint("1.0 (neutre)", "0.5 = trades 2× plus petits. 2.0 = 2× plus gros. Pour ajuster vite sans changer le mode."))}
       ${num("min_trade_usdc", "Montant minimum (USDC)", s.min_trade_usdc, 0.5, 0, 1000,
@@ -1696,8 +1747,13 @@ route(/^more\/settings$/, async () => {
   `);
   setBack("more");
 
-  /* — Dependency grey-out : désactive visuellement les champs dont le toggle parent est OFF — */
+  /* — Dependency grey-out : 2 patterns supportés —
+        1. data-depends-on="toggle_key"            → grise si le toggle est OFF
+        2. data-depends-on-value="key=valeur"      → MASQUE si la valeur du SELECT/input ne match pas
+                                                     (ex. champs spécifiques à sizing_mode=fixed)
+  */
   function applyDeps() {
+    // Pattern 1 — toggle dependency
     document.querySelectorAll("[data-depends-on]").forEach(group => {
       const parentKey = group.dataset.dependsOn;
       const parentInput = document.querySelector(`[data-key="${parentKey}"]`);
@@ -1705,11 +1761,24 @@ route(/^more\/settings$/, async () => {
         group.classList.toggle("depends-off", !parentInput.checked);
       }
     });
+
+    // Pattern 2 — value match (SELECT, input value)
+    document.querySelectorAll("[data-depends-on-value]").forEach(group => {
+      const expr = group.dataset.dependsOnValue || "";
+      const [parentKey, expected] = expr.split("=").map(x => x.trim());
+      if (!parentKey || expected === undefined) return;
+      const parentInput = document.querySelector(`[data-key="${parentKey}"]`);
+      if (!parentInput) return;
+      const currentVal = String(parentInput.value || "");
+      const match = currentVal === expected;
+      // Masquage complet (pas grey-out) — plus clair
+      group.style.display = match ? "" : "none";
+    });
+
     // Met à jour les badges ON/OFF dans les <summary>
     document.querySelectorAll("details.card").forEach(det => {
       const statusSpan = det.querySelector("summary > .summary-status");
       if (!statusSpan) return;
-      // retrouve la checkbox principale (même clé que le data-depends-on du premier dep-group enfant)
       const firstDep = det.querySelector(".dep-group[data-depends-on]");
       if (!firstDep) return;
       const parentInput = document.querySelector(`[data-key="${firstDep.dataset.dependsOn}"]`);
@@ -1750,27 +1819,39 @@ window._applyProfile = async function(profile) {
 };
 
 window._permissiveMode = async function() {
-  const ok = await confirmModal(
-    "🔓 Mode permissif ?",
-    "Active le flag DB `permissive_mode` qui bypass à l'exécution :\n• Signal scoring (V3)\n• Smart filter (winrate, conviction, drift)\n• Skip coin flip\n• Auto-pause cold traders\n• Portfolio manager (max positions, dup market, same-cat, direction bias)\n• Confirmation manuelle\n\n✅ Le bot copiera TOUS les signaux de vos traders suivis.\n\nReste actif (sécurité minimale) :\n• Balance USDC + MATIC gas\n• Daily limit + max_trade_usdc\n• Blacklist marché (par marché bloqué manuellement)\n• Idempotency window (anti double-trade dans la même seconde)\n\n⚠ Configurez bien `max_trade_usdc` + `daily_limit_usdc` pour maîtriser le risque.",
-    "Activer mode permissif"
-  );
-  if (!ok) return;
-  try {
-    // Active le flag DB ET réduit l'idempotency à 60s + max_same_cat à 999 (pour BTC 5m)
-    await api("/settings", {method:"POST", body:{
-      permissive_mode: true,
-      signal_scoring_enabled: false,
-      smart_filter_enabled: false,
-      skip_coin_flip: false,
-      auto_pause_cold_traders: false,
-      manual_confirmation: false,
-      idempotency_window_seconds: 60,
-      max_same_category_positions: 999,
-    }});
-    toast("🔓 Mode permissif ACTIF — tous filtres bypassés");
-    dispatch();
-  } catch (e) { toast(e.message, "error"); }
+  // ancien bouton — rediriger vers le nouveau toggle
+  return window._togglePermissive(true);
+};
+
+window._togglePermissive = async function(turnOn) {
+  if (turnOn) {
+    const ok = await confirmModal(
+      "🔓 Activer le mode permissif ?",
+      "Le bot copiera TOUS les signaux des traders suivis sans filtre.\n\nFiltres bypassés : scoring, smart filter, coin flip, cold trader, portfolio manager, confirmation manuelle, copy delay.\n\nRestent actifs (vraies sécurités) : balance USDC, gas MATIC, daily limit, max_trade_usdc, blacklist marché.\n\n⚠ Configurez bien max_trade_usdc + daily_limit_usdc pour maîtriser le risque.",
+      "Activer"
+    );
+    if (!ok) { dispatch(); return; }
+    try {
+      await api("/settings", {method:"POST", body:{
+        permissive_mode: true,
+        signal_scoring_enabled: false,
+        smart_filter_enabled: false,
+        skip_coin_flip: false,
+        auto_pause_cold_traders: false,
+        manual_confirmation: false,
+        idempotency_window_seconds: 60,
+        max_same_category_positions: 999,
+      }});
+      toast("🔓 Mode permissif ACTIF");
+      dispatch();
+    } catch (e) { toast(e.message, "error"); dispatch(); }
+  } else {
+    try {
+      await api("/settings", {method:"POST", body:{permissive_mode: false}});
+      toast("🔒 Mode permissif désactivé");
+      dispatch();
+    } catch (e) { toast(e.message, "error"); dispatch(); }
+  }
 };
 
 /* 🩺 Diagnostic — modale qui montre tous les bloqueurs */

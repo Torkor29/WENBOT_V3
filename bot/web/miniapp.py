@@ -614,6 +614,8 @@ async def get_copy_positions(user: User = Depends(get_current_user)):
             "master_wallet_full": t.master_wallet or "",
             "is_paper": t.is_paper,
             "created_at": t.created_at.isoformat() if t.created_at else None,
+            "executed_at": t.executed_at.isoformat() if t.executed_at else None,
+            "execution_time_ms": int(t.execution_time_ms) if t.execution_time_ms else None,
             "live": ap is not None,  # True si position_manager track le prix
         })
 
@@ -648,6 +650,8 @@ async def get_copy_trades(limit: int = 20, offset: int = 0, user: User = Depends
             "settlement_pnl": round(t.settlement_pnl, 2) if t.settlement_pnl is not None else None,
             "master_wallet": f"{t.master_wallet[:6]}...{t.master_wallet[-4:]}" if t.master_wallet else "",
             "created_at": t.created_at.isoformat() if t.created_at else None,
+            "executed_at": t.executed_at.isoformat() if t.executed_at else None,
+            "execution_time_ms": int(t.execution_time_ms) if t.execution_time_ms else None,
         } for t in trades],
         "count": len(trades),
     }

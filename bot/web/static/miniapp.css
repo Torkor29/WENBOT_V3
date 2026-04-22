@@ -282,6 +282,60 @@ details.card > summary .summary-status {
   .dep-group { border-left-color: rgba(0,122,255,0.2); }
 }
 
+/* ── Card « Raccourcis » : toggle Mode Permissif XL + actions secondaires ── */
+.shortcuts-card { padding: 14px; }
+
+.permissive-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1.5px solid rgba(255,255,255,0.08);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+  user-select: none;
+}
+.permissive-row:active { transform: scale(0.99); }
+.permissive-row:hover { background: rgba(255,255,255,0.07); }
+.permissive-row.is-on {
+  background: linear-gradient(135deg, rgba(74,222,128,0.10), rgba(94,170,239,0.10));
+  border-color: rgba(74,222,128,0.5);
+}
+
+.permissive-icon {
+  font-size: 28px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.permissive-body { flex: 1; min-width: 0; }
+.permissive-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.permissive-sub {
+  font-size: 12px;
+  opacity: 0.7;
+  line-height: 1.35;
+}
+.permissive-row.is-on .permissive-sub { opacity: 0.85; color: #4ade80; }
+.permissive-row .toggle { pointer-events: none; flex-shrink: 0; }
+
+@media (prefers-color-scheme: light) {
+  .permissive-row {
+    background: rgba(0,0,0,0.03);
+    border-color: rgba(0,0,0,0.08);
+  }
+  .permissive-row:hover { background: rgba(0,0,0,0.05); }
+  .permissive-row.is-on {
+    background: linear-gradient(135deg, rgba(34,197,94,0.10), rgba(0,122,255,0.10));
+    border-color: rgba(34,197,94,0.5);
+  }
+  .permissive-row.is-on .permissive-sub { color: #15803d; }
+}
+
 .card-header {
   display: flex;
   align-items: center;
