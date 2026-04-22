@@ -108,6 +108,8 @@ class SettingsUpdate(BaseModel):
     skip_coin_flip: Optional[bool] = None
     min_conviction_pct: Optional[float] = None
     max_price_drift_pct: Optional[float] = None
+    # Master-side filter (option, désactivé par défaut)
+    min_master_share_size: Optional[float] = None
     # Notifications (cabled in copytrade.py + position_manager.py)
     notification_mode: Optional[str] = None
     notify_on_buy: Optional[bool] = None
@@ -1236,6 +1238,8 @@ async def get_settings(user: User = Depends(get_current_user)):
             "signal_scoring_enabled", "min_signal_score", "scoring_criteria",
             "smart_filter_enabled", "min_trader_winrate_for_type", "min_trader_trades_for_type",
             "skip_coin_flip", "min_conviction_pct", "max_price_drift_pct",
+            # master-side filter
+            "min_master_share_size",
             # notifs
             "notification_mode", "notify_on_buy", "notify_on_sell", "notify_on_sl_tp",
             # followed

@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 # Ignore new positions smaller than this (in shares) to avoid dust.
 # 0.1 share @ price 0.50 ≈ $0.05 — assez bas pour capter les coin flips
 # (BTC Up/Down 5m typiquement size=2-10 shares) sans noyer les logs de dust.
-MIN_SIGNAL_SIZE = 0.1
+# Filtre dust technique uniquement (anti-flickering quand Polymarket renvoie
+# des floats imprécis). NE PAS utiliser pour filtrer la "qualité" — c'est le
+# rôle du setting user `min_master_share_size` (défaut 0 = OFF).
+MIN_SIGNAL_SIZE = 0.01
 
 
 @dataclass

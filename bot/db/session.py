@@ -101,6 +101,8 @@ async def init_db() -> None:
             "ALTER TABLE user_settings ADD COLUMN min_conviction_pct FLOAT DEFAULT 2.0",
             "ALTER TABLE user_settings ADD COLUMN max_price_drift_pct FLOAT DEFAULT 5.0",
             "ALTER TABLE user_settings ADD COLUMN scoring_criteria TEXT",
+            # Master-side share size filter (default 0 = OFF)
+            "ALTER TABLE user_settings ADD COLUMN min_master_share_size FLOAT DEFAULT 0.0",
             # Multi-tenant: link each group config to its owner user
             "ALTER TABLE group_config ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
             # ── Strategy fusion migrations ──

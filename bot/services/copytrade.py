@@ -221,6 +221,18 @@ class CopyTradeEngine:
                         is_paper = True
                         await session.commit()
 
+                # ── Filtre OPTIONNEL côté master : taille minimale en shares ──
+                # Désactivé par défaut (= 0). Toujours appliqué si > 0 (même en
+                # permissif), car c'est un choix EXPLICITE du user pour skip les
+                # micro-trades du master.
+                min_master_size = float(getattr(user_settings, "min_master_share_size", 0.0) or 0.0)
+                if min_master_size > 0 and float(signal.size or 0) < min_master_size:
+                    logger.info(
+                        f"[{tg_id}] ⏭️ Master trade trop petit ({signal.size:.4f} sh "
+                        f"< min {min_master_size:.4f} sh) — skip"
+                    )
+                    return
+
                 # En mode permissif, on saute _passes_filters (categories,
                 # max_expiry, blacklist marché reste actif via _passes_filters_min)
                 if permissive:

@@ -140,6 +140,13 @@ class UserSettings(Base):
     min_conviction_pct: Mapped[float] = mapped_column(Float, default=2.0)
     max_price_drift_pct: Mapped[float] = mapped_column(Float, default=5.0)
 
+    # Master-side filter (avant émission/exécution) — désactivé par défaut.
+    # Si > 0 : skip les trades du master où la position (ou son delta) est
+    # inférieure à cette taille en SHARES. Utile pour ignorer les micro-trades
+    # exploratoires/dust et garder uniquement les vrais paris.
+    # Exemple : 1.0 share sur un marché à $0.30 = $0.30 minimum côté master.
+    min_master_share_size: Mapped[float] = mapped_column(Float, default=0.0)
+
     # Notification fine-grained control
     notify_on_buy: Mapped[bool] = mapped_column(Boolean, default=True)
     notify_on_sell: Mapped[bool] = mapped_column(Boolean, default=True)

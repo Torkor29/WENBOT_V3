@@ -1648,6 +1648,18 @@ route(/^more\/settings$/, async () => {
     </details>
 
     <details class="card">
+      <summary>🎯 Filtre côté master<span class="summary-status">${(s.min_master_share_size||0)>0?'ON':'OFF'}</span></summary>
+      <div class="small" style="margin-bottom:10px">
+        Ignore les <b>petits trades du master</b> (DCA fin, exploration, dust). Mesuré en <b>shares</b> :
+        <br>• 1 share = 1 ticket Polymarket payant $1 si gagné
+        <br>• 1 share sur un marché à $0.30 → master a misé $0.30 minimum
+        <br>• <b>0 = OFF (recommandé par défaut)</b>, le bot copie tout ce que voit
+      </div>
+      ${num("min_master_share_size", "Taille minimum du trade master (en shares)", s.min_master_share_size, 0.5, 0, 1000,
+        hint("0 (off)", "Mets 5-10 si tu ne veux que les vrais paris du master (filtre les micro-trades de quelques cents)."))}
+    </details>
+
+    <details class="card">
       <summary>🧠 Scoring des signaux (0-100)<span class="summary-status">${s.signal_scoring_enabled?'ON':'OFF'}</span></summary>
       <div class="small" style="margin-bottom:10px">Évalue chaque signal sur 6 critères (spread, liquidité, conviction, forme du trader, timing, consensus). Si désactivé → tous les signaux passent.</div>
       ${tgl("signal_scoring_enabled", "Activer le scoring", null, s.signal_scoring_enabled)}
