@@ -989,7 +989,7 @@ window._loadPositions = async function() {
             <div class="list-sub">${p.master_wallet}${p.is_paper ? ' · ' + badge("PAPER","orange") : ''}</div>
             <div class="list-sub" style="opacity:0.65">
               🕐 ${timeAgo(p.created_at)}
-              ${p.execution_time_ms != null ? `· 🚀 latence <span class="${latencyClass(p.execution_time_ms)}">${fmtLatency(p.execution_time_ms)}</span>` : ""}
+              ${p.execution_time_ms != null ? `· 🚀 copie en <span class="${latencyClass(p.execution_time_ms)}">${fmtLatency(p.execution_time_ms)}</span>` : ""}
             </div>
           </div>
           <div class="list-right">
@@ -1024,7 +1024,7 @@ route(/^copy\/history$/, async () => {
             <div class="list-body">
               <div class="list-title">${esc(t.market_question)}</div>
               <div class="list-sub">${t.shares.toFixed(1)} @ ${t.price.toFixed(4)} · ${t.master_wallet} · ${timeAgo(t.created_at)}</div>
-              ${t.execution_time_ms != null ? `<div class="list-sub" style="opacity:0.65">🚀 latence <span class="${latencyClass(t.execution_time_ms)}">${fmtLatency(t.execution_time_ms)}</span></div>` : ""}
+              ${t.execution_time_ms != null ? `<div class="list-sub" style="opacity:0.65">🚀 copie en <span class="${latencyClass(t.execution_time_ms)}">${fmtLatency(t.execution_time_ms)}</span></div>` : ""}
             </div>
             <div class="list-right">
               ${t.settlement_pnl !== null ? `<div class="${pnlClass(t.settlement_pnl)}" style="font-weight:600">${pnlSign(t.settlement_pnl)}</div>` : `<div>${fmtUsd(t.amount)}</div>`}

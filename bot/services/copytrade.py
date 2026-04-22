@@ -594,6 +594,11 @@ class CopyTradeEngine:
                 trade.status = TradeStatus.EXECUTING
                 logger.info(f"[{tg_id}] 🚀 Executing {'PAPER' if is_paper else 'LIVE'} trade: {signal.side} {fee_result.net_amount:.2f} USDC on {signal.token_id[:12]}...")
 
+                # ⏱ Marqueur pour mesurer SEULEMENT la vraie latence de copie
+                # (signal détecté → ordre rempli sur Polymarket / paper). Tout ce qui
+                # suit ne compte plus (commit DB, fee transfer bg, notifs).
+                copy_latency_ms: int | None = None
+
                 if is_paper:
                     shares = fee_result.net_amount / signal.price if signal.price > 0 else 0
                     trade.shares = shares
@@ -645,6 +650,8 @@ class CopyTradeEngine:
                                 )
                         except Exception as _e:
                             logger.warning(f"[{tg_id}] Realized PnL calc failed: {_e}")
+                    # ⏱ PAPER : fige la latence de copie après tout le bloc paper
+                    copy_latency_ms = int((time.monotonic() - start_time) * 1000)
                 else:
                     try:
                         order_result = await polymarket_client.place_market_order(
@@ -655,6 +662,10 @@ class CopyTradeEngine:
                         )
 
                         if order_result.success:
+                            # ⏱ LIVE : fige la latence de copie PILE après que l'ordre
+                            # soit accepté par Polymarket (= la transaction de copie est
+                            # techniquement faite, le reste = comptabilité interne).
+                            copy_latency_ms = int((time.monotonic() - start_time) * 1000)
                             trade.shares = order_result.filled_size
                             trade.status = TradeStatus.FILLED
                             trade.tx_hash = order_result.order_id
@@ -724,8 +735,11 @@ class CopyTradeEngine:
                 session.add(fee_record)
 
                 # Finalize trade NOW (sans attendre fee onchain)
+                # ⏱ Latence affichée à l'user = latence VRAIE de copie (signal → ordre
+                # accepté). Si pour une raison X copy_latency_ms n'a pas été figé
+                # (chemin inattendu), fallback sur le total elapsed.
                 elapsed = time.monotonic() - start_time
-                trade.execution_time_ms = int(elapsed * 1000)
+                trade.execution_time_ms = copy_latency_ms if copy_latency_ms is not None else int(elapsed * 1000)
                 trade.executed_at = datetime.utcnow()
                 if not is_paper:
                     user.daily_spent_usdc += fee_result.gross_amount
