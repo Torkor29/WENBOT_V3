@@ -1,20 +1,47 @@
-"""Multi-master position monitor — watches all followed wallets for trade signals."""
+"""Multi-master activity monitor — watches all followed wallets for trade signals.
+
+Design (2026-04 refactor):
+
+- Primary detection = Polymarket Data API `/activity` endpoint, polled per
+  wallet every `poll_interval` seconds. Each trade is a distinct row with a
+  tx_hash, so BUY+SELL sequences on fast markets (BTC 5min scalping) no
+  longer get swallowed by a position diff that only sees the net state.
+- Positions snapshot is still kept in-memory, refreshed lazily on every
+  poll cycle that yields new activity, so we can compute a SELL's
+  `sell_ratio` = size_sold / position_before_sell = size_sold / (current + size_sold).
+- Dedup by tx_hash with a bounded set to avoid re-emitting a signal we
+  already processed in a previous poll cycle.
+
+Fallback position-diff detection remains available via `_check_wallet_diff`
+but is not wired in the default loop.
+"""
 
 import asyncio
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Awaitable
 
-from bot.services.polymarket import polymarket_client, Position
+from bot.services.polymarket import polymarket_client, Position, Activity
 
 logger = logging.getLogger(__name__)
 
-# Filtre dust technique uniquement — ignore les variations de position
-# < 0.01 share dues à l'imprécision des floats côté API Polymarket.
+# Filtre dust technique uniquement — ignore les micro-trades
+# < 0.01 share dus à l'imprécision des floats côté API Polymarket.
 # 0.01 share @ $0.30 = $0.003, soit techniquement rien.
 # NE PAS utiliser pour filtrer la qualité — c'est le rôle du setting user
 # `min_master_share_size` (défaut 0 = OFF, configurable dans la mini-app).
 MIN_SIGNAL_SIZE = 0.01
+
+# Profondeur de l'historique de tx_hash déjà vus, par wallet. Au-delà de ça,
+# les hashs les plus anciens sont évincés. 1000 couvre ~plusieurs heures
+# d'un trader très actif.
+_TX_HASH_HISTORY = 1000
+
+# Fenêtre (secondes) en arrière utilisée lors du premier snapshot d'un wallet
+# pour rattraper les trades arrivés entre "ajout du wallet" et "poll suivant"
+# sans re-copier un historique ancien que l'utilisateur n'a jamais voulu.
+_INITIAL_LOOKBACK_S = 60
 
 
 @dataclass
@@ -39,9 +66,37 @@ class TradeSignal:
 
 @dataclass
 class WalletState:
-    """Tracks a single wallet's known positions."""
+    """Tracks a single wallet's activity cursor + recent tx hashes.
+
+    `positions` is still kept as a best-effort cache so the consensus scorer
+    and any UI can read it, but it's no longer the source of truth for
+    signal emission.
+    """
     positions: dict[str, Position] = field(default_factory=dict)
     initialized: bool = False
+    # Plus récent timestamp d'activité (secondes) déjà vu pour ce wallet.
+    last_activity_ts: int = 0
+    # Hashs de tx déjà émis en signal (dedup cross-poll). deque pour FIFO
+    # bornée, set associé pour lookup O(1).
+    seen_tx_hashes: deque = field(
+        default_factory=lambda: deque(maxlen=_TX_HASH_HISTORY)
+    )
+    seen_tx_set: set = field(default_factory=set)
+
+    def mark_seen(self, tx_hash: str) -> None:
+        """Add a tx_hash to the dedup history, evicting the oldest if full."""
+        if not tx_hash:
+            return
+        if tx_hash in self.seen_tx_set:
+            return
+        if len(self.seen_tx_hashes) == self.seen_tx_hashes.maxlen:
+            oldest = self.seen_tx_hashes[0]
+            self.seen_tx_set.discard(oldest)
+        self.seen_tx_hashes.append(tx_hash)
+        self.seen_tx_set.add(tx_hash)
+
+    def has_seen(self, tx_hash: str) -> bool:
+        return bool(tx_hash) and tx_hash in self.seen_tx_set
 
 
 class MultiMasterMonitor:
@@ -187,7 +242,7 @@ class MultiMasterMonitor:
                 await asyncio.sleep(5)
 
     async def _snapshot_all(self, initial: bool = False) -> None:
-        """Fetch positions for all watched wallets."""
+        """Fetch positions + activity cursor for all watched wallets."""
         tasks = [
             self._snapshot_wallet(wallet, initial)
             for wallet in list(self._wallet_states.keys())
@@ -195,7 +250,16 @@ class MultiMasterMonitor:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _snapshot_wallet(self, wallet: str, initial: bool = False) -> None:
-        """Fetch positions for a single wallet."""
+        """Initialise le wallet : positions courantes + curseur d'activité.
+
+        On démarre le curseur d'activité à now - _INITIAL_LOOKBACK_S pour
+        rattraper les trades des toutes dernières secondes. Tout ce qui est
+        plus ancien que ce lookback est considéré "déjà acquis" et ne
+        déclenchera jamais de signal — comportement voulu : on copie les
+        trades à venir, pas l'historique rétroactif.
+        """
+        import time as _time
+
         state = self._wallet_states.get(wallet)
         if state is None:
             return
@@ -205,12 +269,16 @@ class MultiMasterMonitor:
         if initial or not state.initialized:
             state.positions = {p.token_id: p for p in positions}
             state.initialized = True
+            state.last_activity_ts = max(
+                0, int(_time.time()) - _INITIAL_LOOKBACK_S
+            )
             logger.info(
-                f"Snapshot {wallet[:10]}...: {len(positions)} positions"
+                f"Snapshot {wallet[:10]}...: {len(positions)} positions, "
+                f"activity cursor @ T-{_INITIAL_LOOKBACK_S}s"
             )
 
     async def _check_all_wallets(self) -> None:
-        """Check all wallets for position changes."""
+        """Run one detection pass on each watched wallet (activity-driven)."""
         tasks = [
             self._check_wallet(wallet)
             for wallet in list(self._wallet_states.keys())
@@ -218,124 +286,153 @@ class MultiMasterMonitor:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _check_wallet(self, wallet: str) -> None:
-        """Compare current positions with known state for one wallet."""
+        """Activity-driven detection : emit one signal per new CLOB trade.
+
+        Flow :
+          1) GET /activity?user=<wallet>&start=<last_ts>  (type=TRADE)
+          2) Si rien : pas d'autre appel → coût idle = 1 HTTP call
+          3) Si activité : rafraîchir positions (une seule fois) pour
+             calculer le sell_ratio des SELL
+          4) Pour chaque activity non-vue, émettre un TradeSignal
+        """
         state = self._wallet_states.get(wallet)
         if state is None or not state.initialized:
             return
 
-        current_positions = await polymarket_client.get_positions_by_address(wallet)
-        current_map = {p.token_id: p for p in current_positions}
-        known = state.positions
+        activities = await polymarket_client.get_activity_by_address(
+            wallet,
+            limit=100,
+            start=state.last_activity_ts or None,
+        )
+        if not activities:
+            return
 
-        # New positions → BUY signal, size increases → proportional BUY signal (H1 FIX)
-        for token_id, pos in current_map.items():
-            if token_id not in known:
-                # Brand new position
-                if pos.size < MIN_SIGNAL_SIZE:
-                    logger.info(
-                        f"[{wallet[:10]}...] ⏭️ NEW position skipped (size {pos.size:.4f} "
-                        f"< MIN_SIGNAL_SIZE {MIN_SIGNAL_SIZE}) on {token_id[:12]}... "
-                        f"({pos.title[:40]})"
-                    )
-                    continue
-                logger.info(
-                    f"[{wallet[:10]}...] 🆕 NEW position detected: {pos.size:.2f} sh "
-                    f"@ {pos.current_price:.4f} on {token_id[:12]}... ({pos.title[:40]})"
+        # Tri chronologique ASC (API renvoie typiquement DESC).
+        activities = sorted(activities, key=lambda a: a.timestamp)
+
+        # Filtrer les doublons (déjà vus sur un poll précédent) + ignorer les
+        # activités <= last_ts (API peut renvoyer == last_ts en bord de
+        # fenêtre). Le curseur sera avancé en fin de fonction.
+        fresh = [
+            a for a in activities
+            if a.timestamp >= state.last_activity_ts
+            and not state.has_seen(a.tx_hash)
+        ]
+        if not fresh:
+            return
+
+        # Snapshot positions courant (une seule fois ici) pour déduire le
+        # sell_ratio des SELL. Pour idle → on ne l'appelle jamais.
+        try:
+            current_positions = await polymarket_client.get_positions_by_address(
+                wallet
+            )
+            current_map = {p.token_id: p for p in current_positions}
+        except Exception as e:
+            logger.warning(
+                f"[{wallet[:10]}...] positions refresh failed mid-check "
+                f"(using stale cache): {e}"
+            )
+            current_map = dict(state.positions)
+
+        for act in fresh:
+            token_id = act.token_id or ""
+            side = (act.side or "").upper()
+            size = float(act.size or 0)
+
+            if not token_id:
+                logger.debug(
+                    f"[{wallet[:10]}...] activity without token_id "
+                    f"(tx={act.tx_hash[:10]}...) skipped"
                 )
+                state.mark_seen(act.tx_hash)
+                continue
+
+            if size < MIN_SIGNAL_SIZE:
+                logger.info(
+                    f"[{wallet[:10]}...] ⏭️ activity skipped (size {size:.4f} "
+                    f"< {MIN_SIGNAL_SIZE}) {side} on {token_id[:12]}..."
+                )
+                state.mark_seen(act.tx_hash)
+                continue
+
+            market_id = act.market_id
+            # market_id absent du payload activity ? retomber sur le cache.
+            if not market_id:
+                cached = current_map.get(token_id) or state.positions.get(token_id)
+                if cached is not None:
+                    market_id = cached.market_id
+
+            pos = current_map.get(token_id) or state.positions.get(token_id)
+            outcome = act.outcome or (pos.outcome if pos else "")
+            title = act.title or (pos.title if pos else "")
+            price = float(act.price or 0) or (
+                float(pos.current_price) if pos else 0.0
+            )
+            pnl_pct = float(pos.pnl_pct) if pos else 0.0
+
+            if side == "BUY":
                 signal = TradeSignal(
                     master_wallet=wallet,
-                    market_id=pos.market_id,
-                    token_id=pos.token_id,
-                    outcome=pos.outcome,
+                    market_id=market_id,
+                    token_id=token_id,
+                    outcome=outcome,
                     side="BUY",
-                    size=pos.size,
-                    price=pos.current_price,
-                    master_pnl_pct=pos.pnl_pct,
-                    market_question=pos.title,
+                    size=size,
+                    price=price,
+                    master_pnl_pct=pnl_pct,
+                    market_question=title,
+                )
+                logger.info(
+                    f"[{wallet[:10]}...] 🆕 activity BUY {size:.2f} sh @ {price:.4f} "
+                    f"on {token_id[:12]}... ({title[:40]})"
+                )
+                await self._emit_signal(signal)
+
+            elif side == "SELL":
+                # Si le marché est résolu, c'est un REDEEM onchain, pas un SELL.
+                if pos and getattr(pos, "redeemable", False):
+                    logger.info(
+                        f"[{wallet[:10]}...] activity SELL on {token_id[:12]}... "
+                        f"but market RESOLVED — skip (REDEEM, not SELL)"
+                    )
+                    state.mark_seen(act.tx_hash)
+                    continue
+                remaining = float(pos.size) if pos else 0.0
+                pre_size = remaining + size
+                sell_ratio = (size / pre_size) if pre_size > 0 else 1.0
+                sell_ratio = max(0.0, min(1.0, sell_ratio))
+                signal = TradeSignal(
+                    master_wallet=wallet,
+                    market_id=market_id,
+                    token_id=token_id,
+                    outcome=outcome,
+                    side="SELL",
+                    size=size,
+                    price=price,
+                    master_pnl_pct=pnl_pct,
+                    market_question=title,
+                    sell_ratio=sell_ratio,
+                )
+                logger.info(
+                    f"[{wallet[:10]}...] 🔻 activity SELL {size:.2f} sh "
+                    f"(~{sell_ratio*100:.0f}% de la position) @ {price:.4f} "
+                    f"on {token_id[:12]}..."
                 )
                 await self._emit_signal(signal)
             else:
-                # H1 FIX: Detect position size increases (top-ups)
-                old_pos = known[token_id]
-                size_delta = pos.size - old_pos.size
-                if size_delta >= MIN_SIGNAL_SIZE:
-                    logger.info(
-                        f"[{wallet[:10]}...] Position increase detected: "
-                        f"{old_pos.size:.2f} → {pos.size:.2f} (+{size_delta:.2f}) "
-                        f"on {token_id[:12]}..."
-                    )
-                    signal = TradeSignal(
-                        master_wallet=wallet,
-                        market_id=pos.market_id,
-                        token_id=pos.token_id,
-                        outcome=pos.outcome,
-                        side="BUY",
-                        size=size_delta,  # only the increase
-                        price=pos.current_price,
-                        master_pnl_pct=pos.pnl_pct,
-                        market_question=pos.title,
-                    )
-                    await self._emit_signal(signal)
-
-        # Detect partial position decreases → proportional SELL signal
-        for token_id, pos in current_map.items():
-            if token_id in known:
-                old_pos = known[token_id]
-                size_decrease = old_pos.size - pos.size
-                if size_decrease >= MIN_SIGNAL_SIZE:
-                    # BUG FIX #2: Skip if market is resolved (= REDEEM, not SELL)
-                    if getattr(pos, "redeemable", False):
-                        logger.info(
-                            f"[{wallet[:10]}...] Position decrease on {token_id[:12]}... "
-                            f"but market RESOLVED — skip SELL signal (REDEEM expected)"
-                        )
-                        continue
-                    # BUG FIX #1: compute sell ratio so followers sell SAME % of
-                    # their own position (not blindly the master's USDC delta).
-                    sell_ratio = size_decrease / old_pos.size if old_pos.size > 0 else 1.0
-                    logger.info(
-                        f"[{wallet[:10]}...] Position decrease detected: "
-                        f"{old_pos.size:.2f} → {pos.size:.2f} (-{size_decrease:.2f}, "
-                        f"{sell_ratio*100:.0f}%) on {token_id[:12]}..."
-                    )
-                    signal = TradeSignal(
-                        master_wallet=wallet,
-                        market_id=pos.market_id,
-                        token_id=pos.token_id,
-                        outcome=pos.outcome,
-                        side="SELL",
-                        size=size_decrease,
-                        price=pos.current_price,
-                        master_pnl_pct=pos.pnl_pct,
-                        market_question=pos.title,
-                        sell_ratio=sell_ratio,
-                    )
-                    await self._emit_signal(signal)
-
-        # Closed positions only → SELL signal (token fully exits)
-        for token_id, pos in known.items():
-            if token_id not in current_map:
-                # BUG FIX #2: Skip if market is resolved (REDEEM, not SELL)
-                if getattr(pos, "redeemable", False):
-                    logger.info(
-                        f"[{wallet[:10]}...] Position {token_id[:12]}... disappeared "
-                        f"but market RESOLVED — skip SELL signal (REDEEM expected)"
-                    )
-                    continue
-                signal = TradeSignal(
-                    master_wallet=wallet,
-                    market_id=pos.market_id,
-                    token_id=pos.token_id,
-                    outcome=pos.outcome,
-                    side="SELL",
-                    size=pos.size,
-                    price=pos.current_price,
-                    master_pnl_pct=pos.pnl_pct,
-                    market_question=pos.title,
-                    sell_ratio=1.0,  # full close
+                logger.debug(
+                    f"[{wallet[:10]}...] activity side unknown ({act.side!r}) — skip"
                 )
-                await self._emit_signal(signal)
 
+            state.mark_seen(act.tx_hash)
+
+        # Avance le curseur au timestamp max vu (NB: pas activities[-1] car
+        # on a trié, donc c'est bien le plus récent).
+        state.last_activity_ts = max(
+            state.last_activity_ts, fresh[-1].timestamp
+        )
+        # Met à jour le cache de positions pour le scoring/consensus.
         state.positions = current_map
 
     async def _emit_signal(self, signal: TradeSignal) -> None:

@@ -59,6 +59,10 @@ class Activity:
     price: float
     tx_hash: str
     slug: str
+    # Token id (CLOB asset) is needed for copy orders — added so the monitor
+    # can emit TradeSignal straight from an Activity feed entry, no extra
+    # position lookup required.
+    token_id: str = ""
 
 
 @dataclass
@@ -308,6 +312,7 @@ class PolymarketClient:
                     price=float(a.get("price", 0)),
                     tx_hash=a.get("transactionHash", ""),
                     slug=a.get("slug", ""),
+                    token_id=a.get("asset", a.get("tokenId", "")),
                 ))
             return activities
 
@@ -371,6 +376,7 @@ class PolymarketClient:
                     price=float(a.get("price", 0)),
                     tx_hash=a.get("transactionHash", ""),
                     slug=a.get("slug", ""),
+                    token_id=a.get("asset", a.get("tokenId", "")),
                 ))
 
             all_activities.extend(page_activities)
@@ -623,62 +629,164 @@ class PolymarketClient:
         token_id: str,
         side: str,
         amount_usdc: float,
+        signal_price: Optional[float] = None,
+        max_slippage_bps: int = 300,
     ) -> OrderResult:
-        """Place a market (FOK) order — fill immediately at best price.
+        """Place a market order with configurable slippage tolerance.
 
-        C4 FIX: FOK orders are atomic — do NOT retry on order rejection
-        (would create duplicate orders). Only retry on network errors
-        (timeout, connection error, 5xx).
+        Strategy optimized for fast markets (BTC 5min etc.) where FOK alone
+        gets rejected when the book moves during detection latency:
+
+        1. Compute a limit price = signal_price × (1 ± slippage_bps / 10000)
+           (capped at 0.99 / floored at 0.01 to stay in-range for Polymarket).
+           If no signal_price is provided, fall back to the current best
+           ask/bid from the order book.
+        2. Try FOK first (atomic full fill) — ideal when liquidity is there.
+        3. If FOK rejected, fall back to FAK (partial fill allowed) — better
+           to copy 60 % of the trade than 0 %.
+
+        Network errors (timeouts/5xx) retry the same attempt; exchange
+        rejections do NOT retry (avoid duplicates).
+
+        Returns OrderResult with filled_size (shares) and avg_price (USDC/share).
+        `success=False, error="Order not filled"` when both FOK and FAK reject.
         """
         import httpx
 
-        last_err: Optional[str] = None
-        for attempt in range(MAX_RETRIES + 1):
+        # ── 1) Compute limit price with slippage tolerance ─────────────
+        limit_price: Optional[float] = None
+        if signal_price and signal_price > 0:
+            if side.upper() == "BUY":
+                limit_price = min(signal_price * (1 + max_slippage_bps / 10000.0), 0.99)
+            else:
+                limit_price = max(signal_price * (1 - max_slippage_bps / 10000.0), 0.01)
+        else:
+            # Fallback: use live orderbook best price, still apply slippage
             try:
-                from py_clob_client.clob_types import MarketOrderArgs, OrderType
-
-                client = self.create_user_client(private_key)
-
-                order_args = MarketOrderArgs(
-                    token_id=token_id,
-                    amount=amount_usdc,
-                    side=side,
-                )
-
-                signed_order = client.create_market_order(order_args)
-                result = client.post_order(signed_order, order_type=OrderType.FOK)
-
-                if result and result.get("orderID"):
-                    return OrderResult(
-                        success=True,
-                        order_id=result["orderID"],
-                        filled_size=float(result.get("filledSize", 0)),
-                        avg_price=float(result.get("avgPrice", 0)),
-                    )
+                book = await self.get_order_book(token_id)
+                if side.upper() == "BUY":
+                    asks = book.get("asks", []) or []
+                    if asks:
+                        best_ask = min(float(a.get("price", 1.0)) for a in asks)
+                        limit_price = min(best_ask * (1 + max_slippage_bps / 10000.0), 0.99)
                 else:
-                    # C4 FIX: FOK rejected by exchange → do NOT retry
-                    error_msg = result.get("errorMsg", "Order not filled") if result else "No response"
-                    logger.warning(f"FOK order rejected (no retry): {error_msg}")
-                    return OrderResult(success=False, error=error_msg)
-
-            except (httpx.TimeoutException, httpx.ConnectError, ConnectionError, TimeoutError) as e:
-                # Network error → safe to retry (order may not have reached exchange)
-                last_err = str(e)
-                if attempt < MAX_RETRIES:
-                    logger.warning(
-                        f"Retry {attempt + 1}/{MAX_RETRIES} market order (network): {e}"
-                    )
-                    await asyncio.sleep(RETRY_BACKOFF_S * (attempt + 1))
-                    continue
-                logger.error(f"Failed to place market order after retries: {e}")
-                return OrderResult(success=False, error=str(e))
-
+                    bids = book.get("bids", []) or []
+                    if bids:
+                        best_bid = max(float(b.get("price", 0.0)) for b in bids)
+                        limit_price = max(best_bid * (1 - max_slippage_bps / 10000.0), 0.01)
             except Exception as e:
-                # Unknown error → do NOT retry FOK (could cause duplicates)
-                logger.error(f"FOK order error (no retry): {e}")
-                return OrderResult(success=False, error=str(e))
+                logger.debug(f"Orderbook fallback failed: {e}")
+        # Absolute fallback so we never send a bogus price.
+        if limit_price is None or limit_price <= 0:
+            limit_price = 0.99 if side.upper() == "BUY" else 0.01
 
-        return OrderResult(success=False, error=last_err or "Max retries exceeded")
+        # ── 2) FOK → FAK with optional network-retry on each attempt ──
+        from py_clob_client.clob_types import MarketOrderArgs, OrderType
+
+        client = self.create_user_client(private_key)
+        last_exchange_err: Optional[str] = None
+
+        for attempt_idx, order_type in enumerate((OrderType.FOK, OrderType.FAK)):
+            type_name = "FOK" if order_type is OrderType.FOK else "FAK"
+
+            for net_retry in range(MAX_RETRIES + 1):
+                try:
+                    order_args = MarketOrderArgs(
+                        token_id=token_id,
+                        amount=amount_usdc,
+                        side=side.upper(),
+                        price=limit_price,
+                    )
+                    signed_order = client.create_market_order(order_args)
+                    result = client.post_order(signed_order, order_type)
+
+                    # Polymarket CLOB returns a dict with shape roughly:
+                    #   {"success": bool, "orderID": str, "takingAmount": str,
+                    #    "makingAmount": str, "errorMsg": str}
+                    # Be generous — also honor legacy "filledSize" / "avgPrice".
+                    succeeded = bool(
+                        result
+                        and (result.get("success") or result.get("orderID"))
+                    )
+                    if succeeded:
+                        # Prefer canonical taking/making fields (real amounts).
+                        taking = float(
+                            result.get("takingAmount")
+                            or result.get("filledSize", 0)
+                            or 0
+                        )
+                        making = float(result.get("makingAmount", 0) or 0)
+                        # For BUY: size = shares received (taking), cost = USDC spent (making)
+                        # For SELL: size = shares sold (making in CLOB), proceeds = USDC received (taking)
+                        # The legacy callers expect `filled_size` in shares, so map accordingly.
+                        if side.upper() == "BUY":
+                            filled_shares = taking
+                            usdc_flow = making
+                        else:
+                            filled_shares = making
+                            usdc_flow = taking
+                        avg_price = (
+                            (usdc_flow / filled_shares)
+                            if filled_shares > 0
+                            else (float(result.get("avgPrice", 0)) or limit_price)
+                        )
+                        logger.info(
+                            f"{type_name} {side.upper()} OK: {filled_shares:.4f} sh @ "
+                            f"{avg_price:.4f} (limit {limit_price:.4f}, slippage "
+                            f"{max_slippage_bps} bps)"
+                        )
+                        return OrderResult(
+                            success=True,
+                            order_id=str(result.get("orderID", "")),
+                            filled_size=filled_shares,
+                            avg_price=avg_price,
+                        )
+
+                    # Exchange rejection — do NOT retry same type, try next.
+                    last_exchange_err = (
+                        str(result.get("errorMsg", "Order not filled"))
+                        if result
+                        else "No response"
+                    )
+                    if attempt_idx == 0:
+                        logger.warning(
+                            f"FOK rejected ({last_exchange_err[:80]}) — "
+                            f"fallback to FAK (partial fill allowed)"
+                        )
+                    else:
+                        logger.warning(
+                            f"FAK also rejected ({last_exchange_err[:80]})"
+                        )
+                    break  # break the net_retry loop, go to next order_type
+
+                except (httpx.TimeoutException, httpx.ConnectError,
+                        ConnectionError, TimeoutError) as e:
+                    # Network error → safe to retry same type (order likely
+                    # never reached the exchange).
+                    if net_retry < MAX_RETRIES:
+                        logger.warning(
+                            f"Retry {net_retry + 1}/{MAX_RETRIES} {type_name} "
+                            f"market order (network): {e}"
+                        )
+                        await asyncio.sleep(RETRY_BACKOFF_S * (net_retry + 1))
+                        continue
+                    last_exchange_err = f"Network error: {e}"
+                    logger.error(
+                        f"{type_name} order failed after network retries: {e}"
+                    )
+                    break
+
+                except Exception as e:
+                    # Unknown error — could be signing/cred issue. Don't retry
+                    # same type (risk of duplicate if it actually went through).
+                    last_exchange_err = str(e)
+                    logger.error(f"{type_name} order error (no retry): {e}")
+                    break
+
+        return OrderResult(
+            success=False,
+            error=last_exchange_err or "Order not filled on FOK or FAK",
+        )
 
     async def cancel_order(self, private_key: str, order_id: str) -> bool:
         """Cancel an open order."""

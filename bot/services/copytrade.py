@@ -698,11 +698,17 @@ class CopyTradeEngine:
                     copy_latency_ms = int((time.monotonic() - start_time) * 1000)
                 else:
                     try:
+                        # Slippage tolerant : FOK → FAK fallback avec prix limite
+                        # calculé depuis le signal. Par défaut 300 bps (3 %) pour
+                        # survivre à la dérive des marchés rapides (BTC 5 min etc.).
+                        _slip = int(getattr(user_settings, "max_slippage_bps", 300) or 300)
                         order_result = await polymarket_client.place_market_order(
                             private_key=pk,
                             token_id=signal.token_id,
                             side=signal.side,
                             amount_usdc=fee_result.net_amount,
+                            signal_price=float(signal.price or 0) or None,
+                            max_slippage_bps=max(0, _slip),
                         )
 
                         if order_result.success:
@@ -1245,9 +1251,41 @@ class CopyTradeEngine:
         except Exception as e:
             logger.error(f"Failed to send notification to {user.telegram_id}: {e}")
 
-    # Rate-limit: track last error notification per user to avoid spam
-    _last_error_notify: dict[int, float] = {}
-    _ERROR_COOLDOWN = 300  # 5 minutes between identical error types
+    # Rate-limit: track last error notification per (user, error-class) to
+    # avoid spam sans silencer des erreurs distinctes. Cooldown court (30 s)
+    # pour rester visible sur les marchés rapides (BTC 5 min) où plusieurs
+    # rejets FOK/FAK peuvent arriver dans la même minute sur des marchés
+    # différents.
+    _last_error_notify: dict[tuple[int, str], float] = {}
+    _ERROR_COOLDOWN = 30  # seconds between identical error classes per user
+
+    @staticmethod
+    def _classify_error(error: str) -> str:
+        """Bucketise les erreurs pour le rate-limit. Deux erreurs du même
+        bucket dans la fenêtre cooldown ne sont notifiées qu'une fois, mais
+        deux buckets différents passent tous les deux."""
+        if not error:
+            return "unknown"
+        low = error.lower()
+        if "solde usdc" in low or "usdc" in low and "insuff" in low:
+            return "balance_usdc"
+        if "matic" in low or "pol" in low and ("gas" in low or "faible" in low):
+            return "balance_matic"
+        if "approb" in low or "allowance" in low:
+            return "approval"
+        if "sizing" in low:
+            return "sizing"
+        if "not filled" in low or "fok" in low or "fak" in low or "reject" in low:
+            return "order_rejected"
+        if "limite" in low or "daily" in low:
+            return "daily_limit"
+        if "confirmation" in low or "bloqué" in low:
+            return "confirmation"
+        if "clé privée" in low or "private key" in low:
+            return "private_key"
+        if "paper" in low:
+            return "paper"
+        return "other"
 
     async def _notify_error(
         self,
@@ -1255,7 +1293,7 @@ class CopyTradeEngine:
         signal: TradeSignal,
         error: str,
     ) -> None:
-        """Send error notification via Telegram (rate-limited).
+        """Send error notification via Telegram (rate-limited per error class).
 
         V3: Routes to Alerts topic + DM based on user notification_mode.
         """
@@ -1265,16 +1303,20 @@ class CopyTradeEngine:
         import time as _time
         import asyncio as _asyncio
 
-        # Rate-limit: max 1 error notification per 5 min per user
+        # Rate-limit par (user, error_class) : une classe d'erreur n'est
+        # notifiée qu'une fois tous les _ERROR_COOLDOWN s, mais des classes
+        # différentes passent toutes.
+        err_class = self._classify_error(error)
+        key = (user.telegram_id, err_class)
         now = _time.time()
-        last = self._last_error_notify.get(user.telegram_id, 0)
+        last = self._last_error_notify.get(key, 0)
         if now - last < self._ERROR_COOLDOWN:
             logger.debug(
                 f"Skipping error notification for {user.telegram_id} "
-                f"(cooldown {self._ERROR_COOLDOWN}s)"
+                f"(class={err_class}, cooldown {self._ERROR_COOLDOWN}s)"
             )
             return
-        self._last_error_notify[user.telegram_id] = now
+        self._last_error_notify[key] = now
 
         from bot.handlers.notifications import format_trade_error
 

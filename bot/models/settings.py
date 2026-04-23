@@ -167,6 +167,15 @@ class UserSettings(Base):
     # les doublons sur des positions qui s'incrémentent.
     idempotency_window_seconds: Mapped[int] = mapped_column(Integer, default=60)
 
+    # Slippage max pour market orders (en basis points, 1 bps = 0.01 %).
+    # Utilisé pour calculer le prix limite envoyé à Polymarket CLOB :
+    #   BUY  → limit_price = signal_price × (1 + bps/10000)
+    #   SELL → limit_price = signal_price × (1 - bps/10000)
+    # Puis FOK d'abord (atomique), fallback FAK (partial fill OK) si rejet.
+    # 300 bps (3 %) par défaut : tolère la dérive typique d'un marché 5 min
+    # entre la détection et l'exécution, sans permettre un remplissage désastreux.
+    max_slippage_bps: Mapped[int] = mapped_column(Integer, default=300)
+
     # Max positions sur la même sous-catégorie (BTC, NFL, etc.)
     # Hardcoded à 3 historiquement, maintenant configurable. 999 = illimité.
     max_same_category_positions: Mapped[int] = mapped_column(Integer, default=3)
